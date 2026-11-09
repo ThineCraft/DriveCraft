@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Authoritative project scope and AI onboarding brief for DriveCraft.">
+  <title>DriveCraft — Scope of Work</title>
+</head>
+<body data-project="DriveCraft" data-status="placeholder">
+  <main>
+    <header>
+      <p>ThineCraft project scope</p>
+      <h1>DriveCraft</h1>
+      <p><strong>Status:</strong> Placeholder project. This document describes intended direction; it does not claim that working functionality exists.</p>
+      <p><a href="https://drive.thinecraft.io">Project website</a></p>
+    </header>
+
+    <section id="purpose">
+      <h2>Purpose</h2>
+      <p>DriveCraft is the planned open-source OneDrive alternative for everyday synchronization, managed metadata, migration, and organization-controlled continuity across Linux, Windows, and macOS.</p>
+    </section>
+
+    <section id="confirmed-direction">
+      <h2>Confirmed direction</h2>
+      <ul>
+        <li>Desktop clients for Zorin OS and other Linux environments, Windows, and macOS.</li>
+        <li>A consistent view of files, sync state, versions, and managed metadata.</li>
+        <li>A local PostgreSQL catalog designed to track more than 100,000 files.</li>
+        <li>Native ShareCraft integration.</li>
+        <li>Microsoft Graph integration for SharePoint and OneDrive discovery, migration, backup, and controlled synchronization.</li>
+        <li>Migration of files and metadata into ShareCraft or SharePoint.</li>
+        <li>An organization-wide offline copy on a server, NAS, or other privately controlled infrastructure.</li>
+        <li>Hybrid operation that combines cloud convenience with independent continuity and recovery.</li>
+      </ul>
+    </section>
+
+    <section id="boundaries">
+      <h2>Boundaries and non-goals</h2>
+      <ul>
+        <li>DriveCraft is not Windows-only and must treat Linux as a first-class platform.</li>
+        <li>It is not merely a backup utility; interactive synchronization, metadata, migration, and continuity are all core concerns.</li>
+        <li>It must support both ShareCraft-native environments and Microsoft 365 interoperability.</li>
+        <li>The offline copy is organization-controlled infrastructure, not an opaque vendor recovery tier.</li>
+        <li>No implementation, benchmark, compatibility level, or production readiness is currently promised.</li>
+      </ul>
+    </section>
+
+    <section id="integrations">
+      <h2>Expected integrations</h2>
+      <ul>
+        <li>ShareCraft document libraries, managed metadata, versions, permissions, and search.</li>
+        <li>Microsoft SharePoint and OneDrive through Microsoft Graph.</li>
+        <li>Local PostgreSQL for durable file and metadata indexing.</li>
+        <li>Servers, NAS devices, and private hosts for organization-wide offline copies.</li>
+      </ul>
+    </section>
+
+    <section id="open-decisions">
+      <h2>Open decisions</h2>
+      <ul>
+        <li>Sync protocol, conflict handling, selective sync, placeholders, and offline semantics.</li>
+        <li>Filesystem integration and packaging strategy on each supported operating system.</li>
+        <li>PostgreSQL schema, indexing, change detection, and performance targets beyond 100,000 files.</li>
+        <li>Metadata mapping and fidelity between ShareCraft, SharePoint, local filesystems, and offline copies.</li>
+        <li>Encryption, key ownership, retention, recovery, and administrative policy.</li>
+      </ul>
+    </section>
+
+    <section id="ai-guidance">
+      <h2>Guidance for AI contributors</h2>
+      <ol>
+        <li>Treat cross-platform support, managed metadata, Microsoft Graph interoperability, and the offline organizational copy as core scope.</li>
+        <li>Do not describe planned behavior as implemented or tested.</li>
+        <li>Do not reduce DriveCraft to a consumer sync folder or a backup-only product.</li>
+        <li>Prefer portable data, transparent state, recoverability, and infrastructure the organization can control.</li>
+        <li>Record new product decisions in this file before presenting them as settled scope.</li>
+      </ol>
+    </section>
+  </main>
+</body>
+</html>
