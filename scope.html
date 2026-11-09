@@ -25,9 +25,28 @@
       <ul>
         <li>Desktop clients for Zorin OS and other Linux environments, Windows, and macOS.</li>
         <li>A consistent view of files, sync state, versions, and managed metadata.</li>
-        <li>A local PostgreSQL catalog designed to track more than 100,000 files.</li>
+        <li>Rust as the implementation language, chosen for performance and for safe native integration with each operating system.</li>
+        <li>A local SQLite catalog, embedded in the client, designed to track far more than 100,000 files. Removing the practical file-count ceiling of the OneDrive sync client is a primary goal.</li>
+        <li>A catalog that separates the description of the server (items, identifiers, hashes, change bookmark) from the state of the individual machine (what is downloaded, pending local changes).</li>
+        <li>A per-library seed: a read-only snapshot of the server part of the catalog, stored inside the document library it describes, so that additional machines can skip the first full scan. It is a starting point for initial synchronization only; afterwards each machine keeps itself current independently.</li>
+        <li>Check out and check in of files directly from the file manager's context menu, with the checked-out state visible on the file.</li>
+        <li>A configurable local folder name for each synchronized library, independent of the site or organization title, so that long titles such as "Trinidad and Tobago Securities and Exchange Ltd." do not have to appear in local paths.</li>
+        <li>A configurable icon for each synchronized library as shown in the file manager.</li>
+        <li>The local folder name and icon are chosen on each machine and stored only there; they are not distributed through the library or its seed.</li>
         <li>Native ShareCraft integration.</li>
         <li>Microsoft Graph integration for SharePoint and OneDrive discovery, migration, backup, and controlled synchronization.</li>
+        <li>Access to a user's personal OneDrive on their work or school account, in addition to shared SharePoint libraries.</li>
+        <li>Three operating modes, set for each connection between a local location and a library:
+          <ul>
+            <li><strong>Sync:</strong> two-way synchronization between the local folder and the library.</li>
+            <li><strong>Ingest:</strong> one-way migration from an existing disk source into the library. DriveCraft reads the source, including the files that symbolic links point to, and uploads; it never writes, changes, or deletes anything in the source.</li>
+            <li><strong>Archive:</strong> one-way egress from the library to local storage. DriveCraft downloads only and never uploads or changes anything on the server. When a file is deleted on the server it is also removed from the archive; recovery of deleted files relies on the server's recycle bin.</li>
+          </ul>
+        </li>
+        <li>A recycle bin view in the client, showing the user's deleted items and allowing them to be found and restored without using the SharePoint web interface. Users who are administrators of the site also see the second-stage recycle bin.</li>
+        <li>The client respects server throttling: it honours the wait times the server asks for and backs off, rather than retrying aggressively or working around limits.</li>
+        <li>When DriveCraft takes over from the Microsoft OneDrive client on a machine, it also takes over the "Sync" action in the SharePoint and OneDrive web pages, so that pressing Sync in the browser opens DriveCraft and adds that library.</li>
+        <li>Build order: DriveCraft works with OneDrive and SharePoint through Microsoft Graph first, so that people can try it against the files they already have and come to trust it; ShareCraft integration follows as ShareCraft takes shape.</li>
         <li>Migration of files and metadata into ShareCraft or SharePoint.</li>
         <li>An organization-wide offline copy on a server, NAS, or other privately controlled infrastructure.</li>
         <li>Hybrid operation that combines cloud convenience with independent continuity and recovery.</li>
@@ -41,6 +60,8 @@
         <li>It is not merely a backup utility; interactive synchronization, metadata, migration, and continuity are all core concerns.</li>
         <li>It must support both ShareCraft-native environments and Microsoft 365 interoperability.</li>
         <li>The offline copy is organization-controlled infrastructure, not an opaque vendor recovery tier.</li>
+        <li>Consumer OneDrive on personal Microsoft accounts is not supported; Microsoft 365 access is through work or school accounts only.</li>
+        <li>The desktop client does not embed or require PostgreSQL. A live catalog file is never shared between machines; only exported seeds are.</li>
         <li>No implementation, benchmark, compatibility level, or production readiness is currently promised.</li>
       </ul>
     </section>
@@ -50,7 +71,7 @@
       <ul>
         <li>ShareCraft document libraries, managed metadata, versions, permissions, and search.</li>
         <li>Microsoft SharePoint and OneDrive through Microsoft Graph.</li>
-        <li>Local PostgreSQL for durable file and metadata indexing.</li>
+        <li>Local SQLite for durable file and metadata indexing on each client.</li>
         <li>Servers, NAS devices, and private hosts for organization-wide offline copies.</li>
       </ul>
     </section>
@@ -60,7 +81,17 @@
       <ul>
         <li>Sync protocol, conflict handling, selective sync, placeholders, and offline semantics.</li>
         <li>Filesystem integration and packaging strategy on each supported operating system.</li>
-        <li>PostgreSQL schema, indexing, change detection, and performance targets beyond 100,000 files.</li>
+        <li>SQLite schema, indexing, change detection, and performance targets beyond 100,000 files.</li>
+        <li>Seed details: file format, location and naming inside the library, refresh policy, and how entries are confirmed against the importing user's own access where folders have unique permissions.</li>
+        <li>Whether a Microsoft Graph change bookmark created by one user can be used by another; this must be tested against a real tenant and decides how a seeded machine catches up.</li>
+        <li>Whether ShareCraft exposes a Microsoft Graph-compatible file interface so that one client serves both backends. This depends on ShareCraft's own open decision on compatibility boundaries with Microsoft 365.</li>
+        <li>Database for the organization-wide offline copy; PostgreSQL is a candidate for that server-side component.</li>
+        <li>How context-menu actions, custom icons, and status indicators are delivered in each file manager (Windows Explorer, Linux file managers, macOS Finder), and what each platform permits.</li>
+        <li>How DriveCraft earns trust alongside the Microsoft OneDrive client: coexistence on the same machine, and whether a read-only or preview mode is offered before it is allowed to change files.</li>
+        <li>Taking over the browser Sync action: it relies on the link format Microsoft's web pages hand to the OneDrive client, which is undocumented and can change; and the OneDrive client may reclaim the action when it updates. How takeover is offered, kept, and handed back needs design.</li>
+        <li>Ingest details: handling of symbolic links that loop or point outside the source, whether a later run picks up only what changed in the source, and what happens to names and paths the server does not accept.</li>
+        <li>Archive details: whether earlier versions of files changed on the server are kept, and how the archive relates to the organization-wide offline copy.</li>
+        <li>Recycle bin details: which Microsoft interface provides listing and restore (Microsoft Graph coverage is limited, so the SharePoint REST interface may be required), how administrator status is determined, and whether permanent deletion is offered from the client at all.</li>
         <li>Metadata mapping and fidelity between ShareCraft, SharePoint, local filesystems, and offline copies.</li>
         <li>Encryption, key ownership, retention, recovery, and administrative policy.</li>
       </ul>
@@ -73,6 +104,7 @@
         <li>Do not describe planned behavior as implemented or tested.</li>
         <li>Do not reduce DriveCraft to a consumer sync folder or a backup-only product.</li>
         <li>Prefer portable data, transparent state, recoverability, and infrastructure the organization can control.</li>
+        <li>Develop and test Microsoft 365 integration against a dedicated test tenant, never against an employer's or customer's production tenant.</li>
         <li>Record new product decisions in this file before presenting them as settled scope.</li>
       </ol>
     </section>
