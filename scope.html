@@ -43,6 +43,9 @@
             <li><strong>Archive:</strong> one-way egress from the library to local storage. DriveCraft downloads only and never uploads or changes anything on the server. When a file is deleted on the server it is also removed from the archive; recovery of deleted files relies on the server's recycle bin.</li>
           </ul>
         </li>
+        <li>Single sign-on with the Windows login: on a Windows machine signed in with a work account, DriveCraft uses that account without asking for credentials again. Other platforms and unmanaged machines fall back to signing in through the browser.</li>
+        <li>DriveCraft acts as the signed-in user. It can reach only the sites, libraries, and files that user is already permitted to reach; it does not hold organization-wide access of its own on the desktop.</li>
+        <li>Long path handling: DriveCraft warns when a file's path is too long for the local system or for the server, and on Windows offers to turn on the operating system's long path support where that is possible.</li>
         <li>A recycle bin view in the client, showing the user's deleted items and allowing them to be found and restored without using the SharePoint web interface. Users who are administrators of the site also see the second-stage recycle bin.</li>
         <li>The client respects server throttling: it honours the wait times the server asks for and backs off, rather than retrying aggressively or working around limits.</li>
         <li>When DriveCraft takes over from the Microsoft OneDrive client on a machine, it also takes over the "Sync" action in the SharePoint and OneDrive web pages, so that pressing Sync in the browser opens DriveCraft and adds that library.</li>
@@ -92,6 +95,9 @@
         <li>Ingest details: handling of symbolic links that loop or point outside the source, whether a later run picks up only what changed in the source, and what happens to names and paths the server does not accept.</li>
         <li>Archive details: whether earlier versions of files changed on the server are kept, and how the archive relates to the organization-wide offline copy.</li>
         <li>Recycle bin details: which Microsoft interface provides listing and restore (Microsoft Graph coverage is limited, so the SharePoint REST interface may be required), how administrator status is determined, and whether permanent deletion is offered from the client at all.</li>
+        <li>Microsoft 365 sign-in and consent: the exact permissions requested, which of them an organization's administrator must approve once for the tenant, publisher verification for the ThineCraft app registration, and single sign-on equivalents on Linux and macOS.</li>
+        <li>How the organization-wide offline copy authenticates, since it runs without a signed-in user and would need access granted by an administrator.</li>
+        <li>Long path details: the thresholds that trigger a warning, whether the warning comes before or after a file is synchronized, how the Windows long path setting is applied when it needs administrator rights or is controlled by organization policy, and how to warn about programs that still cannot open long paths after the setting is on.</li>
         <li>Metadata mapping and fidelity between ShareCraft, SharePoint, local filesystems, and offline copies.</li>
         <li>Encryption, key ownership, retention, recovery, and administrative policy.</li>
       </ul>
