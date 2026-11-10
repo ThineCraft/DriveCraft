@@ -37,6 +37,10 @@ const SAME_EVENT: Duration = Duration::from_secs(10);
 const EASE: Duration = Duration::from_secs(30);
 /// How far back the pacer looks when measuring what was really being sent.
 const MEASURE: Duration = Duration::from_secs(60);
+/// Below this many requests a second DriveCraft is barely asking for anything. A
+/// "slow down" that arrives then is about something else (the server is busy, or
+/// is still counting an earlier burst), and says nothing about the right pace.
+const LIGHT: f64 = 2.0;
 
 struct State {
     rate: f64,
@@ -119,10 +123,17 @@ impl Pacer {
         let mut basis = s.rate;
         if fresh {
             let sent = s.recent.iter().filter(|t| **t <= now).count();
-            if let Some(first) = s.recent.front() {
-                let span = now.duration_since(*first).as_secs_f64().clamp(5.0, MEASURE.as_secs_f64());
-                basis = basis.min((sent as f64 / span).max(1.0));
+            let span = s
+                .recent
+                .front()
+                .map_or(MEASURE.as_secs_f64(), |first| now.duration_since(*first).as_secs_f64().clamp(5.0, MEASURE.as_secs_f64()));
+            let really = sent as f64 / span;
+            if really < LIGHT {
+                // The wait is honoured, above; the pace is not blamed for it. Cutting
+                // here would teach a crawl that the next busy stretch then starts at.
+                return None;
             }
+            basis = basis.min(really);
         }
         s.rate = (basis * CUT).clamp(MIN_RATE, MAX_RATE);
         s.ceiling = s.rate;
@@ -220,11 +231,32 @@ mod tests {
         let t0 = Instant::now();
         let p = Pacer::new(t0);
         let mut now = t0;
+        // Busy, and thrown back again and again without letting up.
         for _ in 0..40 {
-            p.reserve(now);
+            for _ in 0..200 {
+                p.reserve(now);
+                now += secs(0.05);
+            }
             p.slow_down(now, secs(5.0));
-            now += secs(20.0);
+            now += secs(11.0);
         }
         assert_eq!(p.rate(), MIN_RATE);
+    }
+
+    #[test]
+    fn a_wait_while_barely_asking_does_not_teach_a_crawl() {
+        let t0 = Instant::now();
+        let p = Pacer::new(t0);
+        // One request every eleven seconds, as when creating folders one at a time.
+        let mut now = t0;
+        for _ in 0..30 {
+            p.reserve(now);
+            now += secs(11.0);
+            assert_eq!(p.slow_down(now, secs(8.0)), None);
+        }
+        assert_eq!(p.rate(), MAX_RATE, "the pace was never the problem");
+        assert_eq!(p.cuts(), 0);
+        // The wait itself is still honoured.
+        assert!(p.reserve(now) >= secs(7.9));
     }
 }

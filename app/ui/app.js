@@ -472,7 +472,16 @@ function spanWords(secs) {
   if (h < 48) return `${h} h ${String(m % 60).padStart(2, "0")} min`;
   return `${Math.floor(h / 24)} days ${h % 24} h`;
 }
+// The estimate is there to answer "how long?" once and then be left alone. It is
+// taken from the pace so far, counts down by the clock, and is only taken again
+// every half hour, after a short "Recalculating…". The counts and the bar beside
+// it stay live. It is always called an estimate, never a promise.
+const ESTIMATE_EVERY = 30 * 60 * 1000;
+const ESTIMATE_PAUSE = 10 * 1000;
+const ESTIMATE_AFTER = 30 * 1000; // enough of a run to judge a pace by
+const estimateOf = {};
 function renderProgress() {
+  for (const name of Object.keys(estimateOf)) if (!progressOf[name]) delete estimateOf[name];
   const p = selected && progressOf[selected];
   const c = selected && current();
   $("progress").hidden = !p || !c || !isBusy(c);
@@ -480,20 +489,34 @@ function renderProgress() {
   const doing = p.verb === "uploaded" ? "Uploaded" : "Downloaded";
   $("progress-fill").style.width = `${(100 * (p.total_bytes > 0 ? p.bytes / p.total_bytes : p.done / Math.max(1, p.total))).toFixed(2)}%`;
   $("progress-count").textContent =
-    `${doing} ${p.done.toLocaleString()} of ${p.total.toLocaleString()} files \u00b7 ${humanBytes(p.bytes).join(" ")} of ${humanBytes(p.total_bytes).join(" ")}`;
+    `${doing} ${p.done.toLocaleString()} of ${p.total.toLocaleString()} files · ${humanBytes(p.bytes).join(" ")} of ${humanBytes(p.total_bytes).join(" ")}`;
   $("progress-rate").textContent = p.files_per_second > 0
-    ? `${p.files_per_second.toFixed(1)} files and ${humanBytes(Math.round(p.bytes_per_second)).join(" ")} a second` : "";
-  if (p.seconds_left === null || p.seconds_left === undefined) {
-    $("progress-left").textContent = "Working out how long\u2026";
-    $("progress-until").textContent = "";
-    return;
+    ? `${p.files_per_second.toFixed(1)} files/s · ${humanBytes(Math.round(p.bytes_per_second)).join(" ")}/s` : "";
+
+  const now = Date.now();
+  const e = estimateOf[selected] || (estimateOf[selected] = { began: now, left: null, at: 0, pauseUntil: 0 });
+  const known = p.seconds_left !== null && p.seconds_left !== undefined;
+  const say = (left, until) => { $("progress-left").textContent = left; $("progress-until").textContent = until; };
+  if (e.left === null) {
+    // The first estimate waits until there is a pace worth going by.
+    if (!known || now - e.began < ESTIMATE_AFTER) return say("Estimating…", "");
+    Object.assign(e, { left: p.seconds_left, at: now });
   }
-  const left = Math.max(0, p.seconds_left - (Date.now() - p.at) / 1000);
-  $("progress-left").textContent = left < 1 ? "Finishing\u2026" : `${spanWords(left)} left`;
-  const end = new Date(Date.now() + left * 1000);
+  let left = e.left - (now - e.at) / 1000;
+  // Time for a fresh look: every half hour, when the old estimate has run out, or
+  // when the pace has changed so much (three times faster or slower) that the old
+  // estimate would mislead. That last check is made at most every five minutes.
+  const wayOff = known && now - e.at >= 5 * 60 * 1000 && (p.seconds_left > left * 3 || p.seconds_left < left / 3);
+  if (!e.pauseUntil && (now - e.at >= ESTIMATE_EVERY || left <= 0 || wayOff)) e.pauseUntil = now + ESTIMATE_PAUSE;
+  if (e.pauseUntil) {
+    if (now < e.pauseUntil || !known) return say("Recalculating…", "");
+    Object.assign(e, { left: p.seconds_left, at: now, pauseUntil: 0 });
+    left = e.left;
+  }
+  const end = new Date(now + left * 1000);
   const days = Math.floor((new Date(end).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000);
   const day = days === 0 ? "" : days === 1 ? " tomorrow" : ` on ${end.toLocaleDateString([], { weekday: "long" })}`;
-  $("progress-until").textContent = left < 1 ? "" : `Done around ${end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}${day}, at this pace`;
+  say(`Estimated ${spanWords(left)} left`, `Estimated to finish around ${end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}${day}`);
 }
 setInterval(() => { if (state && !$("view-main").hidden) renderProgress(); }, 1000);
 
@@ -557,7 +580,8 @@ function renderLog(c) {
 function pushLog(name, text, cls = "") {
   const list = (logs[name] = logs[name] || []);
   if (!cls) {
-    if (text.startsWith("warning:")) cls = "warn";
+    if (text.startsWith("… and ")) cls = "head";
+    else if (text.startsWith("warning:")) cls = "warn";
     else if (text.startsWith("failed:")) cls = "bad";
   }
   list.push({ text, cls });

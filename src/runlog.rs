@@ -100,14 +100,14 @@ pub fn run_details(report: &Report, net: &NetStats) -> Vec<String> {
     ));
     if report.scanned > 0 && report.scan_secs > 0.0 {
         out.push(format!(
-            "scan: {} items read from the server ({:.0} per second)",
+            "scan: {} items read from the server ({:.0}/s)",
             report.scanned,
             report.scanned as f64 / report.scan_secs
         ));
     }
     if report.downloaded > 0 && report.apply_secs > 0.0 {
         out.push(format!(
-            "downloads: {} files, {} ({:.1} files per second, {} per second)",
+            "downloads: {} files, {} ({:.1} files/s, {}/s)",
             report.downloaded,
             human_bytes(report.bytes_down),
             report.downloaded as f64 / report.apply_secs,
@@ -116,7 +116,7 @@ pub fn run_details(report: &Report, net: &NetStats) -> Vec<String> {
     }
     if report.uploaded > 0 && report.push_secs > 0.0 {
         out.push(format!(
-            "uploads: {} files, {} ({:.1} files per second, {} per second)",
+            "uploads: {} files, {} ({:.1} files/s, {}/s)",
             report.uploaded,
             human_bytes(report.bytes_up),
             report.uploaded as f64 / report.push_secs,

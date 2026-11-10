@@ -76,8 +76,10 @@ async fn waits_as_long_as_the_server_asks_when_throttled() {
     assert_eq!(c.times_throttled(), 1);
     assert_eq!(server.received_requests().await.unwrap().len(), 2, "exactly one retry");
     let stats = c.stats();
-    assert_eq!(stats.pace_cuts, 1, "being asked to wait also slows the pace afterwards");
-    assert!(stats.pace < drivecraft::pace::MAX_RATE);
+    // One lone request says nothing about pace: the wait is honoured, the pace kept.
+    // (Cutting the pace when busy is covered by the pacer's own tests.)
+    assert_eq!(stats.pace_cuts, 0);
+    assert_eq!(stats.pace, drivecraft::pace::MAX_RATE);
 }
 
 #[tokio::test]

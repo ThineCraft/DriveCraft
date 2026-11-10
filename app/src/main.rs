@@ -39,6 +39,9 @@ struct Shared {
 
 const DETAILS_ARG: &str = "--details";
 
+/// How many ordinary lines of a run the window is sent each second.
+const LINES_SHOWN_A_SECOND: u32 = 12;
+
 /// Arguments File Explorer's right-click menu starts DriveCraft with.
 const CHECK_OUT_ARG: &str = "--check-out";
 const CHECK_IN_ARG: &str = "--check-in";
@@ -1063,15 +1066,31 @@ async fn run_sync(app: AppHandle, name: String, opts: Options) -> Finished {
         let mut graph = drivecraft::graph::GraphClient::new(auth);
         let show = {
             let (log, emitter, name) = (log.clone(), emitter.clone(), conn_name.clone());
+            // The log file gets every line. The window gets what a person can follow:
+            // a large run names a file a hundred times a second, and showing each one
+            // slows the run and freezes the window. What matters is always shown.
+            let shown = Arc::new(std::sync::Mutex::new((std::time::Instant::now(), 0u32, 0u64)));
             move |line: &str| {
                 log.line(line);
-                let _ = emitter.emit(
-                    "sync-log",
-                    LogLine {
-                        name: name.clone(),
-                        line: line.to_string(),
-                    },
-                );
+                let send = |text: String| {
+                    let _ = emitter.emit("sync-log", LogLine { name: name.clone(), line: text });
+                };
+                let matters = ["warning:", "failed:", "progress:", "network:", "pacing:", "read ", "scanned "]
+                    .iter()
+                    .any(|p| line.starts_with(p));
+                let mut s = shown.lock().unwrap();
+                if s.0.elapsed() >= std::time::Duration::from_secs(1) {
+                    if s.2 > 0 {
+                        send(format!("\u{2026} and {} more lines, in the log file", s.2));
+                    }
+                    *s = (std::time::Instant::now(), 0, 0);
+                }
+                if matters || s.1 < LINES_SHOWN_A_SECOND {
+                    s.1 += 1;
+                    send(line.to_string());
+                } else {
+                    s.2 += 1;
+                }
             }
         };
         graph.set_event_hook(show.clone());

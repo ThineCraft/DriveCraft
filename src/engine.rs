@@ -251,7 +251,7 @@ impl Progress {
             "unknown".into()
         };
         Some(format!(
-            "progress: {} {} of {} files ({} of {}), {:.1} files per second, {} per second, about {} left",
+            "progress: {} {} of {} files ({} of {}), {:.1} files/s, {}/s, {} left",
             self.verb,
             done,
             self.total,
@@ -538,7 +538,7 @@ impl<'a, R: Remote> Engine<'a, R> {
             self.report.scanned += page.items.len() as u64;
             if self.report.scanned >= next_progress {
                 (self.log)(&format!(
-                    "scanned {} items on the server ({:.0} per second)...",
+                    "scanned {} items on the server ({:.0}/s)...",
                     self.report.scanned,
                     self.report.scanned as f64 / scan_started.elapsed().as_secs_f64().max(0.001)
                 ));
