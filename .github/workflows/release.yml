@@ -1,0 +1,98 @@
+# Builds the Windows installer on GitHub's own machines, on request.
+#
+# It is started by hand (Actions > Release installer > Run workflow), never by a
+# push, so ordinary commits cost nothing. Each run:
+#
+#   1. runs the tests;
+#   2. builds the command-line program and the desktop app, and packs the installer;
+#   3. has GitHub sign a statement of where the installer came from: this
+#      repository, this commit, this workflow. Anyone can check it with
+#         gh attestation verify DriveCraft_<version>_x64-setup.exe --repo ThineCraft/DriveCraft
+#   4. keeps the installer with the run, and, if asked, puts it in a draft release.
+#
+# This is not the signature Windows looks at when someone runs an installer; that
+# needs a code-signing certificate, which GitHub does not issue. See getting-started.html.
+
+name: Release installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Also create a draft release with the installer"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write       # to create the draft release
+  id-token: write       # to sign the statement of origin
+  attestations: write   # to store it
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Reuse earlier builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: release-${{ runner.os }}-
+
+      - name: Test
+        run: cargo test -p drivecraft --locked
+
+      - name: Build the command-line program
+        run: cargo build --release -p drivecraft --locked
+
+      - name: Build the desktop app and pack the installer
+        working-directory: app
+        run: npx --yes @tauri-apps/cli@2.12.4 build
+
+      - name: Find the installer
+        id: installer
+        shell: pwsh
+        run: |
+          $file = Get-ChildItem target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          if (-not $file) { throw "no installer was produced" }
+          $version = (Get-Content app/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($file.Name)" | Set-Content -Encoding ascii "$($file.FullName).sha256"
+          "path=$($file.FullName -replace '\\','/')" >> $env:GITHUB_OUTPUT
+          "name=$($file.Name)" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "### $($file.Name)`n`nSHA-256: ``$hash```nSize: $([math]::Round($file.Length / 1MB, 1)) MB" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Sign a statement of where it came from
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ steps.installer.outputs.path }}
+
+      - name: Keep the installer with this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: DriveCraft-${{ steps.installer.outputs.version }}-installer
+          path: |
+            ${{ steps.installer.outputs.path }}
+            ${{ steps.installer.outputs.path }}.sha256
+          if-no-files-found: error
+
+      - name: Create a draft release
+        if: ${{ inputs.release }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v${{ steps.installer.outputs.version }}"
+          $notes = "Installer built by GitHub from commit ${{ github.sha }}.`n`nCheck where it came from:`n`n    gh attestation verify ${{ steps.installer.outputs.name }} --repo ${{ github.repository }}`n`nIt is not signed with a Windows code-signing certificate, so Windows will ask before running it."
+          gh release create $tag "${{ steps.installer.outputs.path }}" "${{ steps.installer.outputs.path }}.sha256" --draft --target "${{ github.sha }}" --title "DriveCraft ${{ steps.installer.outputs.version }}" --notes $notes

@@ -1278,7 +1278,38 @@ fn show_window(app: &AppHandle) {
     }
 }
 
+/// The argument the uninstaller starts DriveCraft with, before removing it.
+const LEAVE_ARG: &str = "--uninstall-cleanup";
+
+/// Put back everything DriveCraft changed on this computer outside its own folders:
+/// the browser's Sync button, the folders listed in File Explorer and their
+/// right-click menu, and starting with Windows. Files, the catalog, the sign-in
+/// and the logs are not touched. Each step is attempted whatever the others do.
+fn leave_as_found() {
+    let exe = std::env::current_exe().unwrap_or_default();
+    if let Ok(home) = Home::locate() {
+        let _ = drivecraft::takeover::give_back(&sync_button_backup(&home));
+        if let Ok(conns) = home.catalog().and_then(|c| c.connections()) {
+            for c in conns {
+                let _ = drivecraft::explorer::turn_off(&c);
+            }
+        }
+        if let Ok(log) = RunLog::open(&home.dir) {
+            log.line("DriveCraft is being removed: gave back the Sync button and File Explorer");
+        }
+    }
+    let _ = drivecraft::explorer::set_menu(&exe, &[]);
+    let name = exe.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    if !name.is_empty() {
+        drivecraft::takeover::remove_startup("DriveCraft", &name);
+    }
+}
+
 fn main() {
+    if std::env::args().any(|a| a == LEAVE_ARG) {
+        leave_as_found();
+        return;
+    }
     tauri::Builder::default()
         // A second copy hands over to the one already running and exits.
         .plugin(tauri_plugin_single_instance::init(|app, args, _dir| {

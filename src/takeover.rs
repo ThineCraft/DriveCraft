@@ -100,6 +100,7 @@ mod imp {
     pub fn start(_: &str, _: &str) -> Result<()> {
         anyhow::bail!("not available on this system")
     }
+    pub fn remove_startup(_: &str, _: &str) {}
 }
 
 #[cfg(windows)]
@@ -236,6 +237,33 @@ mod imp {
         Ok(())
     }
 
+    /// Remove the "start with Windows" entry called `name`, if it starts `program`.
+    pub fn remove_startup(name: &str, program: &str) {
+        use windows::Win32::System::Registry::{RegDeleteKeyValueW, RegGetValueW, RRF_RT_REG_SZ};
+        const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+        unsafe {
+            let mut data = vec![0u16; 2048];
+            let mut len = (data.len() * 2) as u32;
+            let got = RegGetValueW(
+                HKEY_CURRENT_USER,
+                PCWSTR(wide(RUN).as_ptr()),
+                PCWSTR(wide(name).as_ptr()),
+                RRF_RT_REG_SZ,
+                None,
+                Some(data.as_mut_ptr().cast()),
+                Some(&mut len),
+            );
+            if got != ERROR_SUCCESS {
+                return;
+            }
+            let command = String::from_utf16_lossy(&data[..(len as usize / 2)]).to_lowercase();
+            // Only ever an entry that is DriveCraft's own.
+            if command.contains(&program.to_lowercase()) {
+                let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, PCWSTR(wide(RUN).as_ptr()), PCWSTR(wide(name).as_ptr()));
+            }
+        }
+    }
+
     /// Start `program` with the rest of its command line exactly as given.
     pub fn start(program: &str, rest: &str) -> Result<()> {
         use std::os::windows::process::CommandExt;
@@ -283,6 +311,11 @@ pub fn give_back(backup: &Path) -> Result<()> {
     }
     let _ = std::fs::remove_file(backup);
     Ok(())
+}
+
+/// Remove the "start with Windows" entry called `name`, provided it starts `program`.
+pub fn remove_startup(name: &str, program: &str) {
+    imp::remove_startup(name, program)
 }
 
 /// Keep DriveCraft's entry pointing at where the program is now.
