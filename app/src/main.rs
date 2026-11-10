@@ -31,6 +31,8 @@ struct Shared {
     /// The folders DriveCraft is looking after in File Explorer. Windows shows their
     /// status icons only while these are held.
     links: std::sync::Mutex<std::collections::HashMap<PathBuf, drivecraft::explorer::Link>>,
+    /// A Sync link from the browser that the interface has not dealt with yet.
+    sync_link: std::sync::Mutex<Option<String>>,
 }
 
 /// Arguments File Explorer's right-click menu starts DriveCraft with.
@@ -111,6 +113,8 @@ struct StateView {
     /// The connection DriveCraft is sending through, and the ones it could use.
     link: drivecraft::net::ActiveLink,
     links: Vec<drivecraft::net::Link>,
+    /// Who answers the browser's Sync button.
+    sync_button: drivecraft::takeover::Status,
 }
 
 #[derive(Serialize)]
@@ -384,6 +388,106 @@ async fn check(app: AppHandle, out: bool, file: PathBuf, comment: String) {
     }
 }
 
+/// Where DriveCraft writes down who had the Sync button before it.
+fn sync_button_backup(home: &Home) -> PathBuf {
+    home.dir.join("sync-button-before.json")
+}
+
+/// Take over the browser's Sync button, or give it back exactly as it was.
+#[tauri::command]
+async fn set_sync_button(enabled: bool) -> Result<drivecraft::takeover::Status, String> {
+    local(move || async move {
+        let home = Home::locate()?;
+        let backup = sync_button_backup(&home);
+        if enabled {
+            drivecraft::takeover::take(&std::env::current_exe()?, &backup)?;
+        } else {
+            drivecraft::takeover::give_back(&backup)?;
+        }
+        if let Ok(log) = RunLog::open(&home.dir) {
+            log.line(if enabled { "took over the browser's Sync button" } else { "gave the browser's Sync button back" });
+        }
+        Ok(drivecraft::takeover::status(&backup))
+    })
+    .await
+}
+
+#[derive(Serialize)]
+struct SyncLinkView {
+    /// The link itself, to pass on to another program if the user prefers.
+    url: String,
+    site_title: String,
+    library_title: String,
+    /// The library's address, ready for the connect form.
+    address: String,
+    suggested_name: String,
+    suggested_folder: String,
+    /// The connection that already has this library, if any.
+    existing: Option<String>,
+    /// The browser was signed in as someone else: their account.
+    other_account: Option<String>,
+    /// Sync was pressed inside this folder; DriveCraft connects whole libraries.
+    folder: Option<String>,
+    /// The program that had the Sync button before DriveCraft.
+    other: Option<String>,
+}
+
+/// The Sync link waiting to be dealt with, worked out into what the connect form
+/// needs. Asking takes it: it is handed over once.
+#[tauri::command]
+async fn take_sync_link(app: AppHandle) -> Result<Option<SyncLinkView>, String> {
+    let Some(url) = app.state::<Shared>().sync_link.lock().unwrap().take() else {
+        return Ok(None);
+    };
+    local(move || async move {
+        let link = drivecraft::synclink::parse(&url).map_err(|e| anyhow!(e))?;
+        let home = Home::locate()?;
+        let graph = home.graph()?;
+        let library = graph.library_of_link(&link).await?;
+        let cat = home.catalog()?;
+        let existing = cat.connections()?.into_iter().find(|c| c.drive_id == library.id).map(|c| c.name);
+        let me = graph.me().await.map(|(_, account)| account).unwrap_or_default();
+        let other_account = (!link.account.is_empty() && !me.is_empty() && !link.account.eq_ignore_ascii_case(&me))
+            .then(|| link.account.clone());
+        let name = link.suggested_name();
+        let folder = std::env::var_os("USERPROFILE")
+            .or(std::env::var_os("HOME"))
+            .map(|h| PathBuf::from(h).join("DriveCraft").join(&name).display().to_string())
+            .unwrap_or_default();
+        Ok(Some(SyncLinkView {
+            other: drivecraft::takeover::status(&sync_button_backup(&home)).other,
+            url,
+            site_title: link.site_title,
+            library_title: if link.library_title.is_empty() { library.name } else { link.library_title },
+            address: library.web_url,
+            suggested_name: name,
+            suggested_folder: folder,
+            existing,
+            other_account,
+            folder: link.folder,
+        }))
+    })
+    .await
+}
+
+/// Hand a Sync link to the program that had the Sync button before DriveCraft.
+#[tauri::command]
+async fn pass_on_sync_link(url: String) -> Result<(), String> {
+    local(move || async move { drivecraft::takeover::pass_on(&sync_button_backup(&Home::locate()?), &url) }).await
+}
+
+/// A Sync link among a program's arguments, if the browser started it with one.
+fn sync_link_arg(args: &[String]) -> Option<String> {
+    args.iter().skip(1).find(|a| drivecraft::synclink::is_sync_link(a)).cloned()
+}
+
+/// The browser's Sync button was pressed: bring the window up and let it ask.
+fn sync_pressed(app: &AppHandle, url: String) {
+    *app.state::<Shared>().sync_link.lock().unwrap() = Some(url);
+    show_window(app);
+    let _ = app.emit("sync-link", ());
+}
+
 fn ui_settings_path(home: &Home) -> PathBuf {
     home.dir.join("app.json")
 }
@@ -437,6 +541,7 @@ async fn get_state(app: AppHandle) -> Result<StateView, String> {
             autostart,
             link: drivecraft::net::active_link(),
             links: drivecraft::net::links(),
+            sync_button: drivecraft::takeover::status(&sync_button_backup(&home)),
         })
     })
     .await
@@ -1008,13 +1113,18 @@ fn show_window(app: &AppHandle) {
 fn main() {
     tauri::Builder::default()
         // A second copy hands over to the one already running and exits.
-        .plugin(tauri_plugin_single_instance::init(|app, args, _dir| match menu_request(&args) {
-            // File Explorer's right-click menu: do it, without bringing the window up.
-            Some((out, file)) => {
-                let app = app.clone();
-                tauri::async_runtime::spawn(check(app, out, file, String::new()));
+        .plugin(tauri_plugin_single_instance::init(|app, args, _dir| {
+            if let Some(url) = sync_link_arg(&args) {
+                return sync_pressed(app, url);
             }
-            None => show_window(app),
+            match menu_request(&args) {
+                // File Explorer's right-click menu: do it, without bringing the window up.
+                Some((out, file)) => {
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(check(app, out, file, String::new()));
+                }
+                None => show_window(app),
+            }
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
@@ -1027,6 +1137,7 @@ fn main() {
             auto_sync: AtomicBool::new(load_auto_sync()),
             finished: Default::default(),
             links: Default::default(),
+            sync_link: Default::default(),
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
@@ -1048,6 +1159,9 @@ fn main() {
             pick_icon,
             list_checkouts,
             check_file,
+            set_sync_button,
+            take_sync_link,
+            pass_on_sync_link,
             bin_page,
             restore_bin,
             set_network,
@@ -1104,12 +1218,20 @@ fn main() {
             watch_folders(app.handle().clone());
             {
                 let handle = app.handle().clone();
-                std::thread::spawn(move || tend_explorer(&handle));
+                std::thread::spawn(move || {
+                    tend_explorer(&handle);
+                    // If DriveCraft has the Sync button, keep it pointing at this program.
+                    if let Ok(exe) = std::env::current_exe() {
+                        let _ = drivecraft::takeover::refresh(&exe);
+                    }
+                });
             }
             // Started by Windows at sign-in, or by File Explorer's right-click menu:
             // stay in the tray. Otherwise show the window.
             let args: Vec<String> = std::env::args().collect();
-            if let Some((out, file)) = menu_request(&args) {
+            if let Some(url) = sync_link_arg(&args) {
+                sync_pressed(app.handle(), url);
+            } else if let Some((out, file)) = menu_request(&args) {
                 tauri::async_runtime::spawn(check(app.handle().clone(), out, file, String::new()));
             } else if !args.iter().any(|a| a == HIDDEN_ARG) {
                 show_window(app.handle());

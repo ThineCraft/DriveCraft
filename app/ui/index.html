@@ -128,6 +128,14 @@
           <summary><svg class="ic"><use href="#i-warning"/></svg><span id="health-summary"></span></summary>
           <p class="small muted" id="health-text"></p>
         </details>
+        <div id="syncbtn-wrap" hidden>
+          <label class="switch small" title="Decide which program opens when you press Sync on a library in your browser">
+            <input type="checkbox" id="syncbtn">
+            <span class="track" aria-hidden="true"></span>
+            <span>Browser Sync button</span>
+          </label>
+          <p class="small muted" id="syncbtn-note"></p>
+        </div>
         <button class="textlink small" id="open-logs" title="Every run is recorded in a log file on this computer">Open log folder</button>
         <div class="small muted" id="version"></div>
       </div>
@@ -317,6 +325,13 @@
   <dialog id="add-dialog">
     <form method="dialog" id="add-form" class="dialog-body">
       <h2>Connect a library</h2>
+      <div class="banner from-browser" id="add-from" hidden>
+        <div>
+          <strong id="add-from-title"></strong>
+          <p class="small" id="add-from-text"></p>
+        </div>
+        <button type="button" class="btn quiet" id="add-pass-on" hidden></button>
+      </div>
       <label>Library address
         <div class="with-button">
           <input id="add-address" required spellcheck="false" autocomplete="off" placeholder="https://yourcompany.sharepoint.com/sites/Team/Shared Documents">

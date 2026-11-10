@@ -405,6 +405,13 @@ impl<T: TokenSource> GraphClient<T> {
 
     // ---- check out and check in ----------------------------------------------
 
+    /// The document library a Sync link points at.
+    pub async fn library_of_link(&self, link: &crate::synclink::SyncLink) -> RemoteResult<DriveInfo> {
+        let site = format!("{},{},{}", link.host(), link.site_id, link.web_id);
+        let v = self.get_json(self.url(&["sites", &site, "lists", &link.list_id, "drive"])).await?;
+        drive_info(&v).ok_or_else(|| RemoteError::Other("unexpected library description".into()))
+    }
+
     // ---- the recycle bin ---------------------------------------------------
     //
     // Microsoft offers the recycle bin only through the preview ("beta") edition of

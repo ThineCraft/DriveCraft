@@ -21,6 +21,7 @@
     long_paths: false,
     auto_sync: false,
     autostart: false,
+    sync_button: { ours: false, other: "OneDrive" },
     link: { chosen: true, address: "192.168.1.9", name: "Ethernet 3" },
     links: [{ name: "Ethernet 2", address: "192.168.1.10" }, { name: "Ethernet 3", address: "192.168.1.9" }, { name: "Tailscale", address: "100.107.75.91" }],
     connections: view === "empty" ? [] : [
@@ -70,6 +71,13 @@
       problems[name] = (problems[name] || []).filter((p) => !p.lasting || (kind && !(p.kind === kind && p.path === path)));
     },
     async show_problem() {},
+    async set_sync_button({ enabled }) { data.sync_button = { ours: enabled, other: "OneDrive" }; return data.sync_button; },
+    async take_sync_link() {
+      if (new URLSearchParams(location.search).get("sync") === null || data.linkTaken) return null;
+      data.linkTaken = true;
+      return { url: "odopen://sync/?x=1", site_title: "Finance Team", library_title: "Documents", address: "https://contoso.sharepoint.com/sites/Finance/Shared%20Documents", suggested_name: "Finance Team - Documents", suggested_folder: "C:\\Users\\you\\DriveCraft\\Finance Team - Documents", existing: null, other_account: null, folder: null, other: "OneDrive" };
+    },
+    async pass_on_sync_link() {},
     async bin_page({ next }) {
       await wait(400);
       const lib = "sites/TTSEC/Shared Documents";

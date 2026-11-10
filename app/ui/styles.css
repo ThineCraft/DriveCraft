@@ -383,6 +383,9 @@ select.on { border-color: var(--blue); color: var(--blue-soft-ink); font-weight:
 .brow .meta { text-align: right; white-space: nowrap; font-size: .82rem; color: var(--muted); line-height: 1.4; }
 .bin-more { margin: .6rem auto; display: block; }
 
+#syncbtn-wrap p { margin: .35rem 0 0; line-height: 1.35; }
+.banner.from-browser { background: color-mix(in srgb, var(--blue) 10%, var(--bed-2)); border-color: color-mix(in srgb, var(--blue) 40%, var(--line)); margin: .8rem 0 0; }
+
 /* Dialogs */
 dialog { border: 1px solid var(--line); border-radius: 22px; background: var(--bed); color: var(--text); padding: 0; width: min(580px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); box-shadow: 0 30px 80px #000a; }
 dialog::backdrop { background: #050c14b3; }

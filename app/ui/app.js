@@ -211,6 +211,8 @@ function render() {
   }
   $("auto-sync").checked = state.auto_sync;
   $("autostart").checked = state.autostart;
+  renderSyncButton();
+  if (syncLinkWaiting) handleSyncLink();
   $("version").textContent = `DriveCraft ${state.version}`;
   $("computer-os").textContent = state.is_windows ? "Windows" : navigator.platform || "";
   $("lib-count").textContent = String(state.connections.length);
@@ -1059,6 +1061,89 @@ $("problems-retry").addEventListener("click", () => {
   runSync(name);
 });
 
+// The browser's Sync button: who answers it, and what to do when it is pressed.
+let syncLinkWaiting = true; // one may have started the app
+let addLink = null;
+function renderSyncButton() {
+  const sb = state.sync_button || { ours: false, other: null };
+  $("syncbtn-wrap").hidden = !state.is_windows;
+  $("syncbtn").checked = sb.ours;
+  $("syncbtn-note").textContent = sb.ours
+    ? `Sync in your browser opens DriveCraft. Turn this off to give it back${sb.other ? ` to ${sb.other}` : ""}, exactly as it was.`
+    : sb.other ? `Sync in your browser opens ${sb.other}.` : "No program answers Sync in your browser.";
+}
+$("syncbtn").addEventListener("change", async (ev) => {
+  const on = ev.target.checked;
+  const other = (state.sync_button && state.sync_button.other) || null;
+  if (on) {
+    const ok = await confirmBox(
+      "Let DriveCraft answer the Sync button?",
+      `From now on, pressing Sync on a library in your browser opens DriveCraft${other ? ` instead of ${other}` : ""}. ` +
+      `${other || "OneDrive"} is not removed or changed, and whatever it already synchronizes keeps synchronizing. ` +
+      "DriveCraft writes down the current setting first; turning this switch off puts it back exactly as it was. " +
+      "Each time, DriveCraft asks before connecting anything, and you can still send that one library to the other program.",
+      "Take over the Sync button"
+    );
+    if (!ok) { ev.target.checked = false; return; }
+  }
+  try {
+    const now = await invoke("set_sync_button", { enabled: on });
+    toast(now.ours
+      ? "Sync in your browser now opens DriveCraft."
+      : `The Sync button is back as it was${now.other ? `: it opens ${now.other}` : ""}.`, true);
+  } catch (e) { toast(e); }
+  await refresh();
+});
+async function handleSyncLink() {
+  if ($("view-main").hidden) return; // set up and sign in first; the link waits
+  syncLinkWaiting = false;
+  let link;
+  try {
+    link = await invoke("take_sync_link");
+  } catch (e) {
+    toast(`DriveCraft could not use the Sync link from your browser. ${e}`);
+    return;
+  }
+  if (link) showSyncLink(link);
+}
+function showSyncLink(link) {
+  if (link.existing) {
+    selected = link.existing;
+    render();
+    toast(`${link.library_title} is already connected here, as ${link.existing}.`, true);
+    return;
+  }
+  for (const d of document.querySelectorAll("dialog[open]")) d.close();
+  openAdd();
+  addLink = link;
+  $("add-address").value = link.address;
+  $("add-folder").value = link.suggested_folder;
+  $("add-name").value = link.suggested_name;
+  document.querySelector("input[name=add-mode][value=sync]").checked = true;
+  updateAddHints();
+  $("add-from").hidden = false;
+  $("add-from-title").textContent = `From your browser: ${link.library_title}${link.site_title ? ` in ${link.site_title}` : ""}`;
+  const notes = ["Check the folder and the mode, then Connect. Nothing is synchronized until you do."];
+  if (link.folder) notes.push("You pressed Sync inside a folder; DriveCraft connects the whole library.");
+  if (link.other_account) notes.push(`Your browser is signed in as ${link.other_account}, which is not the account DriveCraft uses.`);
+  $("add-from-text").textContent = notes.join(" ");
+  $("add-pass-on").hidden = !link.other;
+  $("add-pass-on").textContent = `Use ${link.other} for this one`;
+  $("add-folder").focus();
+}
+$("add-pass-on").addEventListener("click", async () => {
+  const link = addLink;
+  try {
+    await invoke("pass_on_sync_link", { url: link.url });
+    addDialog.close();
+    toast(`Handed to ${link.other}.`, true);
+  } catch (e) {
+    $("add-error").textContent = String(e);
+    $("add-error").hidden = false;
+  }
+});
+listen("sync-link", () => { syncLinkWaiting = true; refresh(); });
+
 // Connect a library
 const addDialog = $("add-dialog");
 function addMode() { return document.querySelector("input[name=add-mode]:checked").value; }
@@ -1072,6 +1157,8 @@ function openAdd() {
   $("add-form").reset();
   $("add-found").hidden = true;
   $("add-error").hidden = true;
+  addLink = null;
+  $("add-from").hidden = true;
   updateAddHints();
   addDialog.showModal();
   $("add-address").focus();
