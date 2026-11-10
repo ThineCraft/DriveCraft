@@ -148,4 +148,19 @@ pub trait Remote: Send + Sync {
         new_parent_id: Option<&str>,
         new_name: Option<&str>,
     ) -> impl Future<Output = RemoteResult<RemoteItem>> + Send;
+
+    /// A folder's child by name, or `None`. `parent_id` may be `root`.
+    fn child(
+        &self,
+        drive_id: &str,
+        parent_id: &str,
+        name: &str,
+    ) -> impl Future<Output = RemoteResult<Option<RemoteItem>>> + Send;
+
+    /// Everything directly inside a folder.
+    fn children(
+        &self,
+        drive_id: &str,
+        parent_id: &str,
+    ) -> impl Future<Output = RemoteResult<Vec<RemoteItem>>> + Send;
 }

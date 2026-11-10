@@ -471,3 +471,19 @@ async fn paths_longer_than_the_windows_limit_still_sync() {
     assert_eq!(r.uploaded, 1, "{:?}", r.warnings);
     assert_eq!(rig.remote.read(&rel).unwrap(), b"deep content, edited");
 }
+
+#[tokio::test]
+async fn ingest_preview_counts_every_folder_and_changes_nothing() {
+    let rig = Rig::new(Mode::Ingest);
+    rig.write("a/b/c/deep.txt", "deep");
+    rig.write("a/top.txt", "top");
+    let r = rig
+        .run_with(Options {
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+    assert_eq!(r.remote_folders_created, 3, "a, a/b and a/b/c");
+    assert_eq!(r.uploaded, 2);
+    assert_eq!(rig.remote.writes(), 0);
+}

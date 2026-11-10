@@ -26,6 +26,8 @@
         <li>Desktop clients for Zorin OS and other Linux environments, Windows, and macOS.</li>
         <li>A consistent view of files, sync state, versions, and managed metadata.</li>
         <li>Rust as the implementation language, chosen for performance and for safe native integration with each operating system.</li>
+        <li>A desktop app built with Tauri: the core in Rust and the interface in HTML and CSS, shown in the operating system's own web view, with a system tray icon. The command line and the desktop app share one core and one catalog.</li>
+        <li>On Windows, DriveCraft ships with its own installer and is not distributed through the Microsoft Store, so that the project keeps full control over how it installs, integrates with the system, and updates. The installer is built once the first release's features are complete.</li>
         <li>A local SQLite catalog, embedded in the client, designed to track far more than 100,000 files. Removing the practical file-count ceiling of the OneDrive sync client is a primary goal.</li>
         <li>A catalog that separates the description of the server (items, identifiers, hashes, change bookmark) from the state of the individual machine (what is downloaded, pending local changes).</li>
         <li>A per-library seed: a read-only snapshot of the server part of the catalog, stored inside the document library it describes, so that additional machines can skip the first full scan. It is a starting point for initial synchronization only; afterwards each machine keeps itself current independently.</li>
@@ -33,6 +35,7 @@
         <li>A configurable local folder name for each synchronized library, independent of the site or organization title, so that long titles such as "Trinidad and Tobago Securities and Exchange Ltd." do not have to appear in local paths.</li>
         <li>A configurable icon for each synchronized library as shown in the file manager.</li>
         <li>The local folder name and icon are chosen on each machine and stored only there; they are not distributed through the library or its seed.</li>
+        <li>A seed is published from a client on request, into a <code>.drivecraft</code> folder at the top of the library. A computer connecting to that library for the first time finds it without being told and starts from it. DriveCraft never synchronizes the <code>.drivecraft</code> folder as content.</li>
         <li>Native ShareCraft integration.</li>
         <li>Microsoft Graph integration for SharePoint and OneDrive discovery, migration, backup, and controlled synchronization.</li>
         <li>Access to a user's personal OneDrive on their work or school account, in addition to shared SharePoint libraries.</li>
@@ -45,9 +48,10 @@
         </li>
         <li>Single sign-on with the Windows login: on a Windows machine signed in with a work account, DriveCraft uses that account without asking for credentials again. Other platforms and unmanaged machines fall back to signing in through the browser.</li>
         <li>DriveCraft acts as the signed-in user. It can reach only the sites, libraries, and files that user is already permitted to reach; it does not hold organization-wide access of its own on the desktop.</li>
-        <li>Long path handling: DriveCraft warns when a file's path is too long for the local system or for the server, and on Windows offers to turn on the operating system's long path support where that is possible.</li>
+        <li>Long path handling: DriveCraft warns when a file's path is too long for the local system or for the server. When Windows long path support is off, DriveCraft says so as a notice only. It does not change the setting or offer to; that decision belongs to the computer's administrator.</li>
         <li>A recycle bin view in the client, showing the user's deleted items and allowing them to be found and restored without using the SharePoint web interface. Users who are administrators of the site also see the second-stage recycle bin.</li>
         <li>The client respects server throttling: it honours the wait times the server asks for and backs off, rather than retrying aggressively or working around limits.</li>
+        <li>The client paces itself. It spaces its requests evenly, and when the server asks for a wait it cuts its pace, returns gently after the wait, and only later tests whether a faster pace is tolerated. The pace is learned from the server during each run; there is no setting.</li>
         <li>When DriveCraft takes over from the Microsoft OneDrive client on a machine, it also takes over the "Sync" action in the SharePoint and OneDrive web pages, so that pressing Sync in the browser opens DriveCraft and adds that library.</li>
         <li>Build order: DriveCraft works with OneDrive and SharePoint through Microsoft Graph first, so that people can try it against the files they already have and come to trust it; ShareCraft integration follows as ShareCraft takes shape.</li>
         <li>Migration of files and metadata into ShareCraft or SharePoint.</li>
@@ -83,11 +87,13 @@
       <h2>Open decisions</h2>
       <ul>
         <li>Sync protocol, conflict handling, selective sync, placeholders, and offline semantics.</li>
-        <li>Filesystem integration and packaging strategy on each supported operating system.</li>
+        <li>Filesystem integration and packaging strategy on each supported operating system, including installers and the web view dependency on Linux.</li>
+        <li>For the Windows installer: the installer technology, code signing, and how updates are delivered without a store.</li>
+        <li>Whether synchronization moves from the desktop app into a background service that runs without the window.</li>
         <li>SQLite schema, indexing, change detection, and performance targets beyond 100,000 files.</li>
-        <li>Seed details: file format, location and naming inside the library, refresh policy, and how entries are confirmed against the importing user's own access where folders have unique permissions.</li>
-        <li>Whether a Microsoft Graph change bookmark created by one user can be used by another; this must be tested against a real tenant and decides how a seeded machine catches up.</li>
-        <li>Whether ShareCraft exposes a Microsoft Graph-compatible file interface so that one client serves both backends. This depends on ShareCraft's own open decision on compatibility boundaries with Microsoft 365.</li>
+        <li>Seed details still open: whether seeds are also refreshed automatically (today a seed is published only when someone asks for it), and how entries are confirmed against the importing user's own access where folders have unique permissions.</li>
+        <li>Whether a Microsoft Graph change bookmark created by one user can be used by another. It works for the same user on a second computer. If the server refuses a seed's bookmark, DriveCraft falls back to a full scan, so this decides speed, not correctness.</li>
+        <li>ShareCraft integration follows ShareCraft's own documented DriveCraft API (ShareCraft scope, SC-23), which does not claim Microsoft Graph compatibility. DriveCraft therefore has two connectors behind one internal boundary: Microsoft Graph, and the ShareCraft API. The ShareCraft connector waits on that API's design.</li>
         <li>Database for the organization-wide offline copy; PostgreSQL is a candidate for that server-side component.</li>
         <li>How context-menu actions, custom icons, and status indicators are delivered in each file manager (Windows Explorer, Linux file managers, macOS Finder), and what each platform permits.</li>
         <li>How DriveCraft earns trust alongside the Microsoft OneDrive client: coexistence on the same machine, and whether a read-only or preview mode is offered before it is allowed to change files.</li>
@@ -97,7 +103,7 @@
         <li>Recycle bin details: which Microsoft interface provides listing and restore (Microsoft Graph coverage is limited, so the SharePoint REST interface may be required), how administrator status is determined, and whether permanent deletion is offered from the client at all.</li>
         <li>Microsoft 365 sign-in and consent: the exact permissions requested, which of them an organization's administrator must approve once for the tenant, publisher verification for the ThineCraft app registration, and single sign-on equivalents on Linux and macOS.</li>
         <li>How the organization-wide offline copy authenticates, since it runs without a signed-in user and would need access granted by an administrator.</li>
-        <li>Long path details: the thresholds that trigger a warning, whether the warning comes before or after a file is synchronized, how the Windows long path setting is applied when it needs administrator rights or is controlled by organization policy, and how to warn about programs that still cannot open long paths after the setting is on.</li>
+        <li>Long path details: the thresholds that trigger a warning, whether the warning comes before or after a file is synchronized, and how to warn about programs that cannot open long paths.</li>
         <li>Metadata mapping and fidelity between ShareCraft, SharePoint, local filesystems, and offline copies.</li>
         <li>Encryption, key ownership, retention, recovery, and administrative policy.</li>
       </ul>

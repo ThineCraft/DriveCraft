@@ -11,7 +11,7 @@
     <header>
       <p>ThineCraft project guide</p>
       <h1>DriveCraft: getting started</h1>
-      <p><strong>Status:</strong> Early prototype. The command-line client passes its automated tests against a stand-in server and has had one manual trial against a small SharePoint Online test library (two-way sync between two folders, including a conflict). It has not been tried on a large or heavily used library. Treat first runs as a trial and follow the order below.</p>
+      <p><strong>Status:</strong> Early prototype. The core passes its automated tests against a stand-in server, and the command line and the desktop app have each had a manual trial against a small SharePoint Online test library (two-way sync between two folders, including a conflict). It has not been tried on a large or heavily used library. Treat first runs as a trial and follow the order below.</p>
       <p><a href="scope.html">Project scope</a></p>
     </header>
 
@@ -22,18 +22,21 @@
         <li>Connects a SharePoint document library, or your OneDrive for work, to a local folder whose name you choose.</li>
         <li>Runs in three modes: <strong>Archive</strong> (download only), <strong>Sync</strong> (two-way), and <strong>Ingest</strong> (upload a disk source, following symbolic links, never changing the source).</li>
         <li>Keeps its catalog in a local SQLite database and asks the server only for changes after the first scan. An interrupted first scan resumes where it stopped.</li>
-        <li>Waits as long as the server asks when it is throttled.</li>
+        <li>Waits as long as the server asks when it is throttled, then slows its own pace so that it is asked less often.</li>
         <li>Warns about long paths and about names SharePoint rejects.</li>
         <li>Keeps both versions when a file changed in both places, and holds back large deletions until you confirm them.</li>
         <li>Checks a file out and in from the command line.</li>
+        <li>Publishes a seed: a snapshot of a library's file list, stored in the library, that lets another computer skip the first full scan.</li>
+        <li>A desktop app with a tray icon over the same core: sign in, connect a library, choose the mode, preview and run a sync, and see activity, conflicts and warnings.</li>
       </ul>
       <h3>Not built yet</h3>
       <ul>
         <li>Files on demand (placeholders). Every file in a connected library is downloaded in full.</li>
         <li>File manager integration: context-menu check out and check in, status icons, custom folder icon.</li>
-        <li>The per-library seed, the recycle bin view, taking over the browser Sync button, and sign-in with the Windows login without a browser.</li>
+        <li>The recycle bin view, taking over the browser Sync button, and sign-in with the Windows login without a browser.</li>
         <li>Linux and macOS builds have not been tried. The code is written to be portable.</li>
-        <li>A background service. Synchronization runs when you run the command, or repeatedly with <code>--every</code>.</li>
+        <li>A background service that starts with the computer. Synchronization runs while the desktop app is open (with <strong>Keep in sync</strong> on), or when you run the command.</li>
+        <li>An installer. The desktop app is run from the build folder for now.</li>
       </ul>
     </section>
 
@@ -41,7 +44,10 @@
       <h2>1. Build</h2>
       <p>With Rust installed, from this folder:</p>
       <pre><code>cargo build --release</code></pre>
-      <p>The program is <code>target\release\drivecraft.exe</code>. The commands below assume it is on your path or that you run it from that folder.</p>
+      <p>The command-line program is <code>target\release\drivecraft.exe</code>. The commands below assume it is on your path or that you run it from that folder.</p>
+      <p>To build the desktop app as well:</p>
+      <pre><code>cargo build --release --workspace</code></pre>
+      <p>The desktop app is <code>target\release\drivecraft-app.exe</code>.</p>
     </section>
 
     <section id="app-registration">
@@ -109,11 +115,44 @@ drivecraft sync Migration</code></pre>
       </ul>
     </section>
 
+    <section id="seed">
+      <h2>Seeds: sparing other computers the first scan</h2>
+      <p>The first scan of a large library is slow, because every item has to be read from the server. A seed lets one computer do that once for everyone.</p>
+      <pre><code>drivecraft seed NAME</code></pre>
+      <ul>
+        <li>This stores a compressed snapshot of the library's file list in a <code>.drivecraft</code> folder at the top of the library. In the desktop app it is <strong>Publish a seed</strong>, behind the settings button beside the library's name. It needs write access.</li>
+        <li>Any computer that later connects to that library looks for a seed on its first synchronization. If it finds one, it loads it and asks the server only for what changed since. Nothing has to be copied between computers by hand.</li>
+        <li>A seed is a starting point only. It holds names, sizes and identifiers, not file contents and not settings. After the first synchronization each computer keeps itself current on its own.</li>
+        <li>Publish again whenever you like; the new seed replaces the old one. A seed that is old still works, as long as the server still honours its bookmark; if not, DriveCraft scans in full.</li>
+        <li>Anyone who can open the library can see the <code>.drivecraft</code> folder and so the names of every file in the seed. In a library where some folders are restricted to certain people, think before publishing one.</li>
+        <li><code>drivecraft sync NAME --no-seed</code> ignores a seed and scans in full.</li>
+      </ul>
+    </section>
+
+    <section id="desktop-app">
+      <h2>The desktop app</h2>
+      <p>Run <code>target\release\drivecraft-app.exe</code>. It uses the same settings, sign-in and catalog as the command line, so libraries connected in one appear in the other.</p>
+      <ul>
+        <li>On first run it asks for the application ID, then lets you sign in read-only or with write access. You can change the access level later from the account menu.</li>
+        <li><strong>Connect a library</strong> takes the library's address, a local folder and a mode. <strong>Check</strong> shows which library the address points to before you connect.</li>
+        <li><strong>Preview changes</strong> lists what a run would do and changes nothing. <strong>Sync now</strong> runs it.</li>
+        <li>Switching a library to Sync, deleting held-back items from the library, and disconnecting each ask for confirmation first.</li>
+        <li><strong>Keep in sync</strong> synchronizes every connected library once a minute while the app is running.</li>
+        <li>The window has no title bar. Drag it by the header, and use the one button at the top right to put it away in the system tray, where DriveCraft keeps running. Click the tray icon to bring it back; its menu also has Sync now and Quit.</li>
+        <li>The mode switch and Disconnect are behind the settings button beside the library's name.</li>
+        <li>The theme switch at the bottom right chooses System, Light or Dark. Each theme is a set of named colours in <code>app/ui/styles.css</code>, so further themes can be added as another set.</li>
+      </ul>
+      <p>The interface is built with Tauri: the core is Rust and the screens are HTML in <code>app/ui</code>. Opening <code>app/ui/index.html</code> in a browser shows the interface with sample data, for design work.</p>
+    </section>
+
     <section id="other">
       <h2>Other commands</h2>
       <ul>
-        <li><code>drivecraft doctor</code> shows the setup, the sign-in, and whether Windows long path support is on. <code>drivecraft doctor --enable-long-paths</code>, from an administrator prompt, switches it on.</li>
+        <li><code>drivecraft doctor</code> shows the setup, the sign-in, the network connection in use, and whether Windows long path support is on. When it is off, DriveCraft says so and carries on; the setting belongs to the computer's administrator and DriveCraft does not change it.</li>
         <li><code>drivecraft checkout FILE</code> and <code>drivecraft checkin FILE --comment "..."</code> for a file inside a connected folder.</li>
+        <li><code>drivecraft logs</code> shows where the log files are. Every run, from the command line or the desktop app, is recorded there with timestamps: each action, each time the server throttled or a request was retried, progress with time remaining, and at the end the timings, request counts and peak memory. Logs hold file names and paths but never sign-in tokens, and are kept for 30 days.</li>
+        <li><code>drivecraft network --bind 192.168.1.9</code> makes DriveCraft send through the connection that has that address, on a computer with more than one. It applies to the command line and the desktop app, and changes nothing in the computer's own network settings. <code>drivecraft network --clear</code> undoes it.</li>
+        <li><code>drivecraft sync NAME --parallel 8</code> transfers more files at once (1 to 16; the default is 4).</li>
         <li><code>drivecraft list</code>, <code>drivecraft whoami</code>, <code>drivecraft logout</code>, <code>drivecraft disconnect NAME</code> (leaves local files in place).</li>
       </ul>
       <p>DriveCraft keeps its catalog, settings and saved sign-in in <code>%LOCALAPPDATA%\ThineCraft\DriveCraft</code>. On Windows the saved sign-in is encrypted with your Windows account. Set the <code>DRIVECRAFT_HOME</code> environment variable to use a different folder.</p>

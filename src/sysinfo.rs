@@ -30,34 +30,22 @@ pub fn windows_long_paths_enabled() -> Option<bool> {
     None
 }
 
-/// Switch on Windows long path support. This is a machine-wide setting and needs
-/// administrator rights; without them Windows refuses and nothing changes.
+/// The most memory this process has used so far, where the system can tell us.
 #[cfg(windows)]
-pub fn enable_windows_long_paths() -> Result<(), String> {
-    let out = std::process::Command::new("reg")
-        .args([
-            "add",
-            "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem",
-            "/v",
-            "LongPathsEnabled",
-            "/t",
-            "REG_DWORD",
-            "/d",
-            "1",
-            "/f",
-        ])
-        .output()
-        .map_err(|e| e.to_string())?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-    }
+pub fn peak_memory_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let mut c: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
+    c.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+    // SAFETY: `c` is a correctly sized, writable structure and the handle is the
+    // always-valid pseudo-handle for this process.
+    let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) };
+    (ok != 0).then_some(c.PeakWorkingSetSize as u64)
 }
 
 #[cfg(not(windows))]
-pub fn enable_windows_long_paths() -> Result<(), String> {
-    Err("this setting only exists on Windows".into())
+pub fn peak_memory_bytes() -> Option<u64> {
+    None
 }
 
 pub fn human_bytes(n: u64) -> String {

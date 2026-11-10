@@ -467,6 +467,9 @@ impl Catalog {
         if item.is_root {
             return Ok(Some(String::new()));
         }
+        if !crate::paths::safe_local_name(&item.name) {
+            return Ok(None);
+        }
         let mut parts = vec![item.name.clone()];
         let mut parent = item.parent_id.clone();
         for _ in 0..512 {
@@ -474,6 +477,9 @@ impl Catalog {
             let Some(p) = self.remote_get(conn_id, &pid)? else {
                 return Ok(None);
             };
+            if !p.is_root && !crate::paths::safe_local_name(&p.name) {
+                return Ok(None);
+            }
             if p.is_root {
                 parts.reverse();
                 return Ok(Some(parts.join("/")));
@@ -599,6 +605,140 @@ impl Catalog {
             remote_bytes: bytes as u64,
             local_items: local as u64,
             pending: pending as u64,
+        })
+    }
+}
+
+/// What a seed holds.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SeedInfo {
+    pub items: u64,
+    /// When the seed was made, Unix seconds.
+    pub created_at: i64,
+}
+
+const SEED_FORMAT: &str = "drivecraft-seed";
+const SEED_VERSION: &str = "1";
+
+impl Catalog {
+    /// Write the server part of one connection's catalog to a new file: every item
+    /// and the change bookmark. Nothing about this computer is included.
+    pub fn export_seed(&self, conn: &Connection, dest: &Path, now: i64) -> Result<SeedInfo> {
+        let link = conn
+            .delta_link
+            .as_deref()
+            .context("the library has not been fully scanned yet")?;
+        if dest.exists() {
+            std::fs::remove_file(dest)?;
+        }
+        self.db
+            .execute("ATTACH DATABASE ?1 AS seed", [dest.to_string_lossy().to_string()])?;
+        let written = (|| -> Result<u64> {
+            self.db.execute_batch(
+                "CREATE TABLE seed.meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE seed.items(
+                   id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind TEXT NOT NULL,
+                   size INTEGER NOT NULL, etag TEXT, ctag TEXT, hash TEXT, mtime_ns INTEGER,
+                   is_root INTEGER NOT NULL);",
+            )?;
+            let n = self.db.execute(
+                "INSERT INTO seed.items
+                 SELECT id, parent_id, name, kind, size, etag, ctag, hash, mtime_ns, is_root
+                 FROM remote_items WHERE conn_id = ?1 AND deleted = 0",
+                [conn.id],
+            )?;
+            for (k, v) in [
+                ("format", SEED_FORMAT.to_string()),
+                ("version", SEED_VERSION.to_string()),
+                ("drive_id", conn.drive_id.clone()),
+                ("delta_link", link.to_string()),
+                ("created_at", now.to_string()),
+                ("items", n.to_string()),
+            ] {
+                self.db
+                    .execute("INSERT INTO seed.meta(key, value) VALUES(?1, ?2)", params![k, v])?;
+            }
+            Ok(n as u64)
+        })();
+        self.db.execute("DETACH DATABASE seed", [])?;
+        Ok(SeedInfo {
+            items: written?,
+            created_at: now,
+        })
+    }
+
+    /// Load a seed into a connection that has never been scanned. Every item is
+    /// marked as still to be reconciled with this computer, and the seed's bookmark
+    /// becomes the point from which changes are requested.
+    ///
+    /// A seed is a file from the library, so it is not trusted: it must be for this
+    /// library, in a format this version understands, with names that are safe.
+    pub fn import_seed(&self, conn: &Connection, src: &Path) -> Result<SeedInfo> {
+        let seed = rusqlite::Connection::open_with_flags(src, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .context("the seed could not be opened")?;
+        let meta = |key: &str| -> Result<String> {
+            seed.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+                .with_context(|| format!("the seed has no '{key}' entry"))
+        };
+        if meta("format")? != SEED_FORMAT || meta("version")? != SEED_VERSION {
+            anyhow::bail!("the seed was made by a version of DriveCraft this one does not understand");
+        }
+        if meta("drive_id")? != conn.drive_id {
+            anyhow::bail!("the seed belongs to a different library");
+        }
+        let link = meta("delta_link")?;
+        let created_at: i64 = meta("created_at")?.parse().unwrap_or(0);
+        let existing: i64 = self.db.query_row(
+            "SELECT COUNT(*) FROM remote_items WHERE conn_id = ?1",
+            [conn.id],
+            |r| r.get(0),
+        )?;
+        if existing > 0 || conn.delta_link.is_some() {
+            anyhow::bail!("this connection has already been scanned; a seed is only for a first scan");
+        }
+        let tx = self.db.unchecked_transaction()?;
+        let mut count = 0u64;
+        {
+            let mut insert = tx.prepare(
+                "INSERT INTO remote_items(conn_id, id, parent_id, name, kind, size, etag, ctag, hash, mtime_ns, is_root, deleted, dirty, seen)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,0,1,?12)",
+            )?;
+            let mut read = seed.prepare(
+                "SELECT id, parent_id, name, kind, size, etag, ctag, hash, mtime_ns, is_root FROM items",
+            )?;
+            let mut rows = read.query([])?;
+            while let Some(r) = rows.next()? {
+                let name: String = r.get(2)?;
+                let is_root: i64 = r.get(9)?;
+                if is_root == 0 && !crate::paths::safe_local_name(&name) {
+                    anyhow::bail!("the seed contains a name that is not safe to use: {name:?}");
+                }
+                let kind: String = r.get(3)?;
+                insert.execute(params![
+                    conn.id,
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    name,
+                    ItemKind::parse(&kind).as_str(),
+                    r.get::<_, i64>(4)?.max(0),
+                    r.get::<_, Option<String>>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                    r.get::<_, Option<String>>(7)?,
+                    r.get::<_, Option<i64>>(8)?,
+                    (is_root != 0) as i64,
+                    conn.generation
+                ])?;
+                count += 1;
+            }
+        }
+        tx.execute(
+            "UPDATE connections SET delta_link = ?1, cursor = NULL WHERE id = ?2",
+            params![link, conn.id],
+        )?;
+        tx.commit()?;
+        Ok(SeedInfo {
+            items: count,
+            created_at,
         })
     }
 }

@@ -42,6 +42,13 @@ pub fn invalid_server_name(name: &str) -> Option<&'static str> {
     None
 }
 
+/// Whether a name from the server, or from a seed, is safe to create on disk as a
+/// single file or folder. This is what stops a name from reaching outside the
+/// connected folder.
+pub fn safe_local_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.chars().any(|c| matches!(c, '/' | '\\' | ':' | '\0'))
+}
+
 /// Local files that are never uploaded: editor locks, temporary files, operating
 /// system clutter, and DriveCraft's own partial downloads.
 pub fn is_ignored_local_name(name: &str) -> bool {
@@ -222,6 +229,15 @@ mod tests {
         assert!(invalid_server_name("com1.txt").is_some());
         assert!(invalid_server_name("COMPANY.txt").is_none());
         assert!(invalid_server_name("~$draft.docx").is_some());
+    }
+
+    #[test]
+    fn refuses_names_that_could_escape_the_folder() {
+        assert!(safe_local_name("report.docx"));
+        assert!(safe_local_name(".drivecraft"));
+        for bad in ["", ".", "..", "a/b", "..\\up", "x:stream"] {
+            assert!(!safe_local_name(bad), "{bad}");
+        }
     }
 
     #[test]

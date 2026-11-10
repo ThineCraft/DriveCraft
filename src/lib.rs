@@ -9,3 +9,8 @@ pub mod remote;
 pub mod auth;
 pub mod graph;
 pub mod sysinfo;
+pub mod home;
+pub mod runlog;
+pub mod net;
+pub mod pace;
+pub mod seed;

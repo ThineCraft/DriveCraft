@@ -12,8 +12,10 @@ base64 = "0.23.1"
 bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive"] }
 directories = "6.0.0"
+flate2 = "1.1.11"
 futures-util = "0.3.34"
 getrandom = "0.4.3"
+if-addrs = "0.15.0"
 open = "5.4.5"
 reqwest = { version = "0.13.5", default-features = false, features = ["form", "http2", "json", "query", "rustls", "stream", "system-proxy"] }
 rusqlite = { version = "0.41.1", features = ["bundled"] }
@@ -31,4 +33,7 @@ tempfile = "3.27.0"
 wiremock = "0.6.5"
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Registry"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_ProcessStatus", "Win32_System_Registry", "Win32_System_Threading"] }
+
+[workspace]
+members = [".", "app"]

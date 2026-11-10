@@ -22,6 +22,8 @@ struct State {
     downloads: u64,
     page_size: usize,
     expire_bookmarks: bool,
+    refuse_bookmarks: bool,
+    full_scans: u64,
 }
 
 pub struct FakeRemote {
@@ -265,6 +267,17 @@ impl FakeRemote {
         self.st.lock().unwrap().page_size = n;
     }
 
+    /// The next use of a bookmark is refused outright, as it might be when the
+    /// bookmark was made by a different person.
+    pub fn refuse_bookmarks(&self) {
+        self.st.lock().unwrap().refuse_bookmarks = true;
+    }
+
+    /// How many times the whole library has been enumerated from the start.
+    pub fn full_scans(&self) -> u64 {
+        self.st.lock().unwrap().full_scans
+    }
+
     pub fn expire_bookmarks(&self) {
         self.st.lock().unwrap().expire_bookmarks = true;
     }
@@ -274,7 +287,10 @@ impl Remote for FakeRemote {
     async fn delta(&self, _drive: &str, link: Option<&str>) -> RemoteResult<DeltaPage> {
         let mut st = self.st.lock().unwrap();
         let (offset, mark) = match link {
-            None => (0usize, st.log.len()),
+            None => {
+                st.full_scans += 1;
+                (0usize, st.log.len())
+            }
             Some(l) if l.starts_with("E:") => {
                 let mut p = l[2..].split(':');
                 (p.next().unwrap().parse().unwrap(), p.next().unwrap().parse().unwrap())
@@ -283,6 +299,10 @@ impl Remote for FakeRemote {
                 if st.expire_bookmarks {
                     st.expire_bookmarks = false;
                     return Err(RemoteError::ResyncRequired);
+                }
+                if st.refuse_bookmarks {
+                    st.refuse_bookmarks = false;
+                    return Err(RemoteError::Other("access denied: this bookmark belongs to someone else".into()));
                 }
                 let from: usize = l[2..].parse().unwrap();
                 return Ok(DeltaPage {
@@ -413,5 +433,20 @@ impl Remote for FakeRemote {
         e.item.etag = Some(format!("e{v}"));
         st.record(item_id);
         Ok(st.items[item_id].item.clone())
+    }
+
+    async fn child(&self, _drive: &str, parent_id: &str, name: &str) -> RemoteResult<Option<RemoteItem>> {
+        let st = self.st.lock().unwrap();
+        Ok(st.child(parent_id, name).map(|id| st.items[&id].item.clone()))
+    }
+
+    async fn children(&self, _drive: &str, parent_id: &str) -> RemoteResult<Vec<RemoteItem>> {
+        let st = self.st.lock().unwrap();
+        Ok(st
+            .items
+            .values()
+            .filter(|e| e.item.parent_id.as_deref() == Some(parent_id))
+            .map(|e| e.item.clone())
+            .collect())
     }
 }

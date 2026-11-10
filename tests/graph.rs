@@ -75,6 +75,9 @@ async fn waits_as_long_as_the_server_asks_when_throttled() {
     assert!(started.elapsed() >= std::time::Duration::from_secs(2), "waited {:?}", started.elapsed());
     assert_eq!(c.times_throttled(), 1);
     assert_eq!(server.received_requests().await.unwrap().len(), 2, "exactly one retry");
+    let stats = c.stats();
+    assert_eq!(stats.pace_cuts, 1, "being asked to wait also slows the pace afterwards");
+    assert!(stats.pace < drivecraft::pace::MAX_RATE);
 }
 
 #[tokio::test]

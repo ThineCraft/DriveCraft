@@ -19,6 +19,19 @@ pub const GRAPH_BASE: &str = "https://graph.microsoft.com/v1.0";
 /// is prioritised over anonymous traffic when a tenant is under load.
 const USER_AGENT: &str = concat!("ISV|ThineCraft|DriveCraft/", env!("CARGO_PKG_VERSION"));
 
+/// Counters for one client's traffic.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
+pub struct NetStats {
+    pub requests: u64,
+    pub retries: u64,
+    pub throttled: u64,
+    pub throttle_wait_ms: u64,
+    /// The pace now allowed, in requests a second.
+    pub pace: f64,
+    /// How many times the pace was cut because the server asked for a wait.
+    pub pace_cuts: u64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DriveInfo {
     pub id: String,
@@ -33,7 +46,14 @@ pub struct GraphClient<T: TokenSource> {
     base: String,
     /// No request is sent before this moment. Set when the server asks us to wait.
     not_before: Mutex<Instant>,
+    /// Spaces requests out, and learns from the server how fast is too fast.
+    pacer: crate::pace::Pacer,
     throttled: AtomicU64,
+    throttle_wait_ms: AtomicU64,
+    requests: AtomicU64,
+    retries: AtomicU64,
+    /// Told about throttling, retries and network errors as they happen.
+    hook: Option<Box<dyn Fn(&str) + Send + Sync>>,
     pub max_attempts: u32,
     /// Files up to this size are sent in one request.
     pub simple_upload_limit: u64,
@@ -48,7 +68,7 @@ impl<T: TokenSource> GraphClient<T> {
 
     pub fn with_base(tokens: T, base: &str) -> Self {
         Self {
-            http: reqwest::Client::builder()
+            http: crate::net::client_builder()
                 .connect_timeout(Duration::from_secs(30))
                 // A connection that goes silent is abandoned and retried, not waited on forever.
                 .read_timeout(Duration::from_secs(120))
@@ -57,7 +77,12 @@ impl<T: TokenSource> GraphClient<T> {
             tokens,
             base: base.trim_end_matches('/').to_string(),
             not_before: Mutex::new(Instant::now()),
+            pacer: crate::pace::Pacer::new(Instant::now()),
             throttled: AtomicU64::new(0),
+            throttle_wait_ms: AtomicU64::new(0),
+            requests: AtomicU64::new(0),
+            retries: AtomicU64::new(0),
+            hook: None,
             max_attempts: 8,
             simple_upload_limit: 4 * 1024 * 1024,
             chunk_size: 32 * 320 * 1024,
@@ -65,6 +90,28 @@ impl<T: TokenSource> GraphClient<T> {
     }
 
     /// How many times the server asked this client to slow down.
+    /// Receive a line whenever the server throttles a request or one is retried.
+    pub fn set_event_hook(&mut self, hook: impl Fn(&str) + Send + Sync + 'static) {
+        self.hook = Some(Box::new(hook));
+    }
+
+    fn event(&self, text: String) {
+        if let Some(h) = &self.hook {
+            h(&text);
+        }
+    }
+
+    pub fn stats(&self) -> NetStats {
+        NetStats {
+            requests: self.requests.load(Ordering::Relaxed),
+            retries: self.retries.load(Ordering::Relaxed),
+            throttled: self.throttled.load(Ordering::Relaxed),
+            throttle_wait_ms: self.throttle_wait_ms.load(Ordering::Relaxed),
+            pace: self.pacer.rate(),
+            pace_cuts: self.pacer.cuts(),
+        }
+    }
+
     pub fn times_throttled(&self) -> u64 {
         self.throttled.load(Ordering::Relaxed)
     }
@@ -86,10 +133,16 @@ impl<T: TokenSource> GraphClient<T> {
         }
     }
 
+    /// Hold every request back for `delay`. Several requests in flight are often
+    /// throttled together; only the time this actually adds to the wait is counted.
     fn hold_off(&self, delay: Duration) {
-        let until = Instant::now() + delay;
+        let now = Instant::now();
+        let until = now + delay;
         let mut gate = self.not_before.lock().unwrap();
-        if until > *gate {
+        let already = (*gate).max(now);
+        if until > already {
+            self.throttle_wait_ms
+                .fetch_add((until - already).as_millis() as u64, Ordering::Relaxed);
             *gate = until;
         }
     }
@@ -115,19 +168,39 @@ impl<T: TokenSource> GraphClient<T> {
         let mut refreshed = false;
         loop {
             self.wait_for_gate().await;
+            let slot = self.pacer.reserve(Instant::now());
+            if !slot.is_zero() {
+                tokio::time::sleep(slot).await;
+            }
             let mut req = make(&self.http).header(reqwest::header::USER_AGENT, USER_AGENT);
             if authed {
                 let token = self.tokens.token(false).await.map_err(RemoteError::Unauthorized)?;
                 req = req.bearer_auth(token);
             }
             attempt += 1;
-            let resp = match req.send().await {
+            let (client, request) = req.build_split();
+            let request = request.map_err(RemoteError::other)?;
+            // What is being asked, for the log: the method and the path only. Query
+            // strings can carry access tokens for downloads and are never recorded.
+            let what = {
+                let path: String = request.url().path().chars().take(90).collect();
+                format!("{} {}", request.method(), path)
+            };
+            self.requests.fetch_add(1, Ordering::Relaxed);
+            let resp = match client.execute(request).await {
                 Ok(r) => r,
                 Err(e) => {
                     if attempt >= self.max_attempts {
+                        self.event(format!("network: {what} failed after {attempt} attempts: {e}"));
                         return Err(RemoteError::Other(format!("network error: {e}")));
                     }
-                    tokio::time::sleep(Self::backoff(attempt)).await;
+                    self.retries.fetch_add(1, Ordering::Relaxed);
+                    let wait = Self::backoff(attempt);
+                    self.event(format!(
+                        "network: {what} failed ({e}); retrying in {:.1}s (attempt {attempt})",
+                        wait.as_secs_f64()
+                    ));
+                    tokio::time::sleep(wait).await;
                     continue;
                 }
             };
@@ -155,13 +228,30 @@ impl<T: TokenSource> GraphClient<T> {
                         .and_then(|v| v.trim().parse::<u64>().ok())
                         .map(Duration::from_secs)
                         .unwrap_or_else(|| Self::backoff(attempt));
+                    self.event(format!(
+                        "throttled: the server answered {} to {what}; waiting {:.0}s as asked (attempt {attempt})",
+                        status.as_u16(),
+                        delay.as_secs_f64()
+                    ));
                     self.hold_off(delay);
+                    if let Some(pace) = self.pacer.slow_down(Instant::now(), delay) {
+                        self.event(format!(
+                            "pacing: slowing to {pace:.1} requests a second, and easing back in after the wait"
+                        ));
+                    }
                 }
                 500 | 502 | 504 => {
                     if attempt >= self.max_attempts {
                         return Err(error_from(resp).await);
                     }
-                    tokio::time::sleep(Self::backoff(attempt)).await;
+                    self.retries.fetch_add(1, Ordering::Relaxed);
+                    let wait = Self::backoff(attempt);
+                    self.event(format!(
+                        "network: the server answered {} to {what}; retrying in {:.1}s (attempt {attempt})",
+                        status.as_u16(),
+                        wait.as_secs_f64()
+                    ));
+                    tokio::time::sleep(wait).await;
                 }
                 _ => return Err(error_from(resp).await),
             }
@@ -548,6 +638,31 @@ impl<T: TokenSource> Remote for GraphClient<T> {
         let v: Value = resp.json().await.map_err(RemoteError::other)?;
         parse_item(&v).ok_or_else(|| RemoteError::Other("unexpected move response".into()))
     }
+
+    async fn child(&self, drive_id: &str, parent_id: &str, name: &str) -> RemoteResult<Option<RemoteItem>> {
+        let url = self.url(&["drives", drive_id, "items", &format!("{parent_id}:"), &format!("{name}:")]);
+        match self.get_json(url).await {
+            Ok(v) => Ok(parse_item(&v)),
+            Err(RemoteError::NotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn children(&self, drive_id: &str, parent_id: &str) -> RemoteResult<Vec<RemoteItem>> {
+        let mut out = Vec::new();
+        let mut next = Some(self.url(&["drives", drive_id, "items", parent_id, "children"]));
+        while let Some(url) = next {
+            let v = self.get_json(url).await?;
+            if let Some(items) = v["value"].as_array() {
+                out.extend(items.iter().filter_map(parse_item));
+            }
+            next = match v["@odata.nextLink"].as_str() {
+                Some(link) => Some(self.trusted_link(link)?),
+                None => None,
+            };
+        }
+        Ok(out)
+    }
 }
 
 async fn error_from(resp: reqwest::Response) -> RemoteError {
@@ -607,7 +722,7 @@ pub fn parse_item(v: &Value) -> Option<RemoteItem> {
     let id = v["id"].as_str()?.to_string();
     let deleted = v.get("deleted").is_some() || v.get("@removed").is_some();
     let is_root = v.get("root").is_some();
-    let kind = if v.get("package").is_some() {
+    let kind = if v.get("package").is_some() || v.get("malware").is_some() {
         ItemKind::Other
     } else if v.get("folder").is_some() || is_root {
         ItemKind::Folder
@@ -664,6 +779,9 @@ mod tests {
 
         let gone = parse_item(&json!({ "id": "X", "deleted": { "state": "deleted" } })).unwrap();
         assert!(gone.deleted);
+
+        let infected = parse_item(&json!({ "id": "M", "name": "bad.pdf", "file": {}, "malware": { "description": "x" } })).unwrap();
+        assert_eq!(infected.kind, ItemKind::Other, "flagged files are skipped, not downloaded");
 
         let notebook = parse_item(&json!({ "id": "N", "name": "Notes", "package": { "type": "oneNote" }, "folder": {} })).unwrap();
         assert_eq!(notebook.kind, ItemKind::Other);

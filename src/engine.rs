@@ -30,6 +30,9 @@ pub struct Options {
     pub concurrency: usize,
     /// Ingest: upload a new version when a source file changed after it was ingested.
     pub ingest_update: bool,
+    /// Where to unpack a seed. When set, a connection that has never been scanned
+    /// looks for a seed in the library before doing a full scan.
+    pub seed_dir: Option<PathBuf>,
 }
 
 impl Default for Options {
@@ -40,11 +43,12 @@ impl Default for Options {
             max_deletes: 20,
             concurrency: 4,
             ingest_update: false,
+            seed_dir: None,
         }
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct Report {
     pub scanned: u64,
     pub downloaded: u64,
@@ -61,9 +65,17 @@ pub struct Report {
     pub skipped: u64,
     pub failed: u64,
     pub held_deletes: u64,
+    /// Items taken from a seed instead of a full scan.
+    pub seeded: u64,
     pub long_paths: u64,
     pub bytes_down: u64,
     pub bytes_up: u64,
+    /// Seconds spent reading the server's change feed.
+    pub scan_secs: f64,
+    /// Seconds spent bringing this computer in line with the server.
+    pub apply_secs: f64,
+    /// Seconds spent sending local changes, or ingesting.
+    pub push_secs: f64,
     pub warnings: Vec<String>,
 }
 
@@ -127,6 +139,55 @@ fn verifies(d: &Downloaded, item: &RemoteItem) -> bool {
 struct Download {
     item: RemoteItem,
     rel: String,
+}
+
+/// Periodic "how far along" lines for long transfers: count, rate and time left.
+struct Progress {
+    verb: &'static str,
+    total: usize,
+    total_bytes: u64,
+    started: std::time::Instant,
+    last: std::time::Instant,
+}
+
+impl Progress {
+    const EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+
+    fn new(verb: &'static str, total: usize, total_bytes: u64) -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            verb,
+            total,
+            total_bytes,
+            started: now,
+            last: now,
+        }
+    }
+
+    fn tick(&mut self, done: usize, bytes: u64) -> Option<String> {
+        if self.last.elapsed() < Self::EVERY || done >= self.total {
+            return None;
+        }
+        self.last = std::time::Instant::now();
+        let secs = self.started.elapsed().as_secs_f64().max(0.001);
+        let rate = done as f64 / secs;
+        let left = if rate > 0.0 {
+            crate::runlog::human_duration((self.total - done) as f64 / rate)
+        } else {
+            "unknown".into()
+        };
+        Some(format!(
+            "progress: {} {} of {} files ({} of {}), {:.1} files per second, {} per second, about {} left",
+            self.verb,
+            done,
+            self.total,
+            crate::sysinfo::human_bytes(bytes),
+            crate::sysinfo::human_bytes(self.total_bytes),
+            rate,
+            crate::sysinfo::human_bytes((bytes as f64 / secs) as u64),
+            left
+        ))
+    }
 }
 
 enum UploadKind {
@@ -231,18 +292,33 @@ impl<'a, R: Remote> Engine<'a, R> {
             }
         }
 
-        self.pull_remote().await?;
+        let started = std::time::Instant::now();
+        let seeded = self.try_seed().await;
+        self.pull_remote(seeded).await?;
+        self.report.scan_secs = started.elapsed().as_secs_f64();
+        (self.log)(&format!(
+            "read {} changes from the server in {:.1}s",
+            self.report.scanned, self.report.scan_secs
+        ));
+        let started = std::time::Instant::now();
         match self.conn.mode {
-            Mode::Archive => self.apply_remote().await?,
+            Mode::Archive => {
+                self.apply_remote().await?;
+                self.report.apply_secs = started.elapsed().as_secs_f64();
+            }
             Mode::Sync => {
                 self.apply_remote().await?;
+                self.report.apply_secs = started.elapsed().as_secs_f64();
+                let started = std::time::Instant::now();
                 self.push_local().await?;
+                self.report.push_secs = started.elapsed().as_secs_f64();
             }
             Mode::Ingest => {
                 if !self.opts.dry_run {
                     self.cat.clear_all_dirty(self.id())?;
                 }
                 self.ingest().await?;
+                self.report.push_secs = started.elapsed().as_secs_f64();
             }
         }
         if !self.opts.dry_run {
@@ -257,9 +333,36 @@ impl<'a, R: Remote> Engine<'a, R> {
 
     // ---- step 1: the server's change feed ------------------------------------
 
-    async fn pull_remote(&mut self) -> Result<()> {
+    /// On a first scan, look for a seed in the library. Any problem with a seed is
+    /// only a reason to do the full scan instead.
+    async fn try_seed(&mut self) -> bool {
+        let Some(dir) = self.opts.seed_dir.clone() else { return false };
+        let fresh = self.conn.delta_link.is_none() && self.conn.cursor.is_none() && !self.conn.resyncing;
+        if !fresh || self.opts.dry_run {
+            return false;
+        }
+        match crate::seed::fetch(self.cat, self.remote, &self.conn, &dir).await {
+            Ok(Some(info)) => {
+                self.report.seeded = info.items;
+                (self.log)(&format!(
+                    "started from a seed in the library: {} items, so the full scan is skipped",
+                    info.items
+                ));
+                true
+            }
+            Ok(None) => false,
+            Err(e) => {
+                self.warn(format!("a seed was found but could not be used ({e:#}); doing a full scan"));
+                false
+            }
+        }
+    }
+
+    async fn pull_remote(&mut self, seeded: bool) -> Result<()> {
+        let mut first_after_seed = seeded;
         let mut resynced = false;
         let mut next_progress = 5000;
+        let scan_started = std::time::Instant::now();
         loop {
             self.conn = self.cat.connection_by_id(self.id())?;
             let link = self.conn.cursor.clone().or(self.conn.delta_link.clone());
@@ -271,8 +374,19 @@ impl<'a, R: Remote> Engine<'a, R> {
                     self.cat.begin_resync(self.id())?;
                     continue;
                 }
+                // A seed's bookmark was made on another computer, possibly by another
+                // person. If the server will not accept it here, scan in full instead.
+                Err(e) if first_after_seed && !resynced => {
+                    resynced = true;
+                    self.warn(format!(
+                        "the seed's bookmark was not accepted here ({e}); rescanning the whole library"
+                    ));
+                    self.cat.begin_resync(self.id())?;
+                    continue;
+                }
                 Err(e) => return Err(e).context("reading changes from the server"),
             };
+            first_after_seed = false;
             self.cat.apply_delta_page(
                 &self.conn,
                 &page.items,
@@ -281,7 +395,11 @@ impl<'a, R: Remote> Engine<'a, R> {
             )?;
             self.report.scanned += page.items.len() as u64;
             if self.report.scanned >= next_progress {
-                (self.log)(&format!("scanned {} items on the server...", self.report.scanned));
+                (self.log)(&format!(
+                    "scanned {} items on the server ({:.0} per second)...",
+                    self.report.scanned,
+                    self.report.scanned as f64 / scan_started.elapsed().as_secs_f64().max(0.001)
+                ));
                 next_progress += 5000;
             }
             if page.delta_link.is_some() {
@@ -323,6 +441,13 @@ impl<'a, R: Remote> Engine<'a, R> {
 
         let mut downloads = Vec::new();
         for (path, it) in live {
+            // The seed folder is DriveCraft's own; it is never synchronized as content.
+            if crate::seed::is_seed_path(&path) {
+                if !self.opts.dry_run {
+                    self.cat.clear_dirty(self.id(), &it.id)?;
+                }
+                continue;
+            }
             let r = match it.kind {
                 ItemKind::Folder => self.apply_folder(&path, &it),
                 ItemKind::File => self.apply_file(&path, &it, &mut downloads),
@@ -625,7 +750,9 @@ impl<'a, R: Remote> Engine<'a, R> {
         let root = self.root.clone();
         let (drive_ref, root_ref) = (&drive, &root);
         let total = downloads.len();
+        let total_bytes: u64 = downloads.iter().map(|d| d.item.size).sum();
         let mut done = 0usize;
+        let mut progress = Progress::new("downloaded", total, total_bytes);
         let mut stream = futures_util::stream::iter(downloads.into_iter().map(|d| async move {
             let abs = join_rel(root_ref, &d.rel);
             let tmp = abs.with_file_name(paths::partial_name(&d.item.id));
@@ -668,8 +795,8 @@ impl<'a, R: Remote> Engine<'a, R> {
                             if let Some(odd) = odd {
                                 self.warn(format!("{}: {odd}", d.rel));
                             }
-                            if total >= 50 && done % 50 == 0 {
-                                (self.log)(&format!("downloaded {done} of {total}..."));
+                            if let Some(line) = progress.tick(done, self.report.bytes_down) {
+                                (self.log)(&line);
                             }
                         }
                         Err(e) => {
@@ -1046,8 +1173,8 @@ impl<'a, R: Remote> Engine<'a, R> {
                 format!("more than {}", self.opts.max_deletes)
             };
             self.warn(format!(
-                "{} items are missing here ({why}). They were NOT deleted on the server. \
-                 If you meant to delete them, run again with --confirm-deletes.",
+                "{} items are missing here ({why}). They were NOT deleted on the server; \
+                 that needs your confirmation.",
                 top.len()
             ));
             return Ok(());
@@ -1099,7 +1226,9 @@ impl<'a, R: Remote> Engine<'a, R> {
         let drive = self.conn.drive_id.clone();
         let drive_ref = &drive;
         let total = uploads.len();
+        let total_bytes: u64 = uploads.iter().map(|u| u.st.size).sum();
         let mut done = 0usize;
+        let mut progress = Progress::new("uploaded", total, total_bytes);
         let mut stream = futures_util::stream::iter(uploads.into_iter().map(|u| async move {
             let target = match &u.kind {
                 UploadKind::New { parent_id, name } => UploadTarget::New { parent_id, name },
@@ -1132,8 +1261,8 @@ impl<'a, R: Remote> Engine<'a, R> {
                     )?;
                     self.report.uploaded += 1;
                     self.report.bytes_up += u.st.size;
-                    if total >= 50 && done % 50 == 0 {
-                        (self.log)(&format!("uploaded {done} of {total}..."));
+                    if let Some(line) = progress.tick(done, self.report.bytes_up) {
+                        (self.log)(&line);
                     }
                 }
                 Err(RemoteError::Conflict(_)) => {
@@ -1206,7 +1335,12 @@ impl<'a, R: Remote> Engine<'a, R> {
 
             if ft.is_dir() {
                 let id = match &parent_id {
-                    None => None,
+                    None => {
+                        // Its parent does not exist on the server yet (a preview).
+                        self.note(format!("create folder {rel} on the server"));
+                        self.report.remote_folders_created += 1;
+                        None
+                    }
                     Some(pid) => match self.cat.remote_child(self.id(), pid, &name)? {
                         Some(r) if r.kind == ItemKind::Folder => Some(r.id),
                         Some(_) => {

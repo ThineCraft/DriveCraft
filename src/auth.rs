@@ -119,7 +119,7 @@ impl Authenticator {
         Ok(Self {
             authority: format!("https://login.microsoftonline.com/{}/oauth2/v2.0", app.tenant),
             app,
-            http: reqwest::Client::builder().build()?,
+            http: crate::net::client_builder().build()?,
             store,
             cached: tokio::sync::Mutex::new(None),
         })
