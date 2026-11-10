@@ -230,6 +230,8 @@ function renderAccount() {
   $("account-access").textContent = `Work account · ${state.can_write ? "Read and write" : "Read only"}`;
   $("avatar").textContent = (name.match(/\b\w/g) || ["?"]).slice(0, 2).join("").toUpperCase();
   $("menu-account").textContent = identity ? identity.account : "";
+  // Cut short when long; the whole address shows on hover.
+  $("menu-account").title = identity ? identity.account : "";
   $("menu-access").textContent = state.can_write ? "Switch to read-only access" : "Sign in with write access";
 }
 
