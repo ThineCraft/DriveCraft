@@ -307,8 +307,12 @@ function sweepIn(from = 1) {
   cancelAnimationFrame(motionFrame);
   if (panel.hidden || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
     panel.style.filter = panel.style.transform = panel.style.opacity = "";
+    $("detail").style.overflow = "";
     return;
   }
+  // The moving panel must not make its frame grow a scroll bar for half a second.
+  const frame = $("detail");
+  frame.style.overflow = "hidden";
   const start = performance.now();
   const step = (now) => {
     const t = Math.min(1, (now - start) / 500);
@@ -317,6 +321,7 @@ function sweepIn(from = 1) {
       // Leave nothing behind: a filter would change how the panel's menus stack.
       panel.style.filter = panel.style.transform = panel.style.opacity = "";
       amount.setAttribute("stdDeviation", "0 0");
+      frame.style.overflow = "";
       return;
     }
     amount.setAttribute("stdDeviation", `0 ${(22 * left).toFixed(2)}`);
@@ -452,7 +457,45 @@ function renderDetail() {
 
   renderResult(c);
   renderLog(c);
+  renderProgress();
 }
+
+// How long a run still has to go. The core reports where it is about once a second;
+// between reports the clock here keeps counting down by itself.
+const progressOf = {};
+function spanWords(secs) {
+  const s = Math.max(0, Math.round(secs));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ${String(s % 60).padStart(2, "0")} s`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h} h ${String(m % 60).padStart(2, "0")} min`;
+  return `${Math.floor(h / 24)} days ${h % 24} h`;
+}
+function renderProgress() {
+  const p = selected && progressOf[selected];
+  const c = selected && current();
+  $("progress").hidden = !p || !c || !isBusy(c);
+  if ($("progress").hidden) return;
+  const doing = p.verb === "uploaded" ? "Uploaded" : "Downloaded";
+  $("progress-fill").style.width = `${(100 * (p.total_bytes > 0 ? p.bytes / p.total_bytes : p.done / Math.max(1, p.total))).toFixed(2)}%`;
+  $("progress-count").textContent =
+    `${doing} ${p.done.toLocaleString()} of ${p.total.toLocaleString()} files \u00b7 ${humanBytes(p.bytes).join(" ")} of ${humanBytes(p.total_bytes).join(" ")}`;
+  $("progress-rate").textContent = p.files_per_second > 0
+    ? `${p.files_per_second.toFixed(1)} files and ${humanBytes(Math.round(p.bytes_per_second)).join(" ")} a second` : "";
+  if (p.seconds_left === null || p.seconds_left === undefined) {
+    $("progress-left").textContent = "Working out how long\u2026";
+    $("progress-until").textContent = "";
+    return;
+  }
+  const left = Math.max(0, p.seconds_left - (Date.now() - p.at) / 1000);
+  $("progress-left").textContent = left < 1 ? "Finishing\u2026" : `${spanWords(left)} left`;
+  const end = new Date(Date.now() + left * 1000);
+  const days = Math.floor((new Date(end).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000);
+  const day = days === 0 ? "" : days === 1 ? " tomorrow" : ` on ${end.toLocaleDateString([], { weekday: "long" })}`;
+  $("progress-until").textContent = left < 1 ? "" : `Done around ${end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}${day}, at this pace`;
+}
+setInterval(() => { if (state && !$("view-main").hidden) renderProgress(); }, 1000);
 
 function renderResult(c) {
   const r = results[c.name];
@@ -1627,6 +1670,11 @@ listen("sync-started", (ev) => {
   }
 });
 listen("sync-log", (ev) => pushLog(ev.payload.name, ev.payload.line));
+listen("sync-progress", (ev) => {
+  progressOf[ev.payload.name] = Object.assign({ at: Date.now() }, ev.payload);
+  if (ev.payload.name === selected) renderProgress();
+});
+$("brand-link").addEventListener("click", () => invoke("open_site").catch(toast));
 listen("notice", (ev) => {
   // Inside an open dialog a toast would be hidden behind it.
   if (checkoutsFor) { if (!ev.payload.good) checkoutsError(ev.payload.text); }
@@ -1635,6 +1683,7 @@ listen("notice", (ev) => {
 });
 listen("sync-finished", (ev) => {
   const f = ev.payload;
+  delete progressOf[f.name];
   results[f.name] = f;
   if (f.error) pushLog(f.name, `stopped: ${f.error}`, "bad");
   if (problemsFor === f.name) loadProblems();

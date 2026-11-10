@@ -132,18 +132,60 @@ mod imp {
         Ok(format!("{PROVIDER}!{}!{safe}", user_sid()?))
     }
 
-    fn ours() -> Vec<StorageProviderSyncRootInfo> {
-        init();
-        let Ok(all) = StorageProviderSyncRootManager::GetCurrentSyncRoots() else {
-            return Vec::new();
+    /// Where Windows keeps its list of registered folders. Reading it is all that
+    /// the ordinary run of a synchronization needs; it works on every edition of
+    /// Windows, including those without File Explorer's cloud features, where
+    /// asking Windows' own cloud interface can bring the program down.
+    const ROOTS: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager";
+
+    fn read_text(key: windows::Win32::System::Registry::HKEY, sub: &str, name: &str) -> Option<String> {
+        use windows::Win32::Foundation::ERROR_SUCCESS;
+        use windows::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
+        let mut data = vec![0u16; 4096];
+        let mut len = (data.len() * 2) as u32;
+        let got = unsafe {
+            RegGetValueW(key, PCWSTR(wide(sub).as_ptr()), PCWSTR(wide(name).as_ptr()), RRF_RT_REG_SZ, None, Some(data.as_mut_ptr().cast()), Some(&mut len))
         };
-        all.into_iter()
-            .filter(|r| r.Id().is_ok_and(|id| id.to_string().starts_with(&format!("{PROVIDER}!"))))
-            .collect()
+        if got != ERROR_SUCCESS {
+            return None;
+        }
+        let chars = (len as usize / 2).min(data.len());
+        Some(String::from_utf16_lossy(&data[..chars]).trim_end_matches('\0').to_string())
     }
 
-    fn folder_of(r: &StorageProviderSyncRootInfo) -> Option<PathBuf> {
-        Some(PathBuf::from(r.Path().ok()?.Path().ok()?.to_string()))
+    /// DriveCraft's registered folders for this Windows user: (identifier, folder, name, icon).
+    fn ours() -> Vec<(String, PathBuf, String, String)> {
+        use windows::Win32::Foundation::ERROR_SUCCESS;
+        use windows::Win32::System::Registry::{RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ};
+        let Ok(sid) = user_sid() else { return Vec::new() };
+        let mine = format!("{PROVIDER}!{sid}!");
+        let mut out = Vec::new();
+        unsafe {
+            let mut roots = HKEY::default();
+            if RegOpenKeyExW(HKEY_LOCAL_MACHINE, PCWSTR(wide(ROOTS).as_ptr()), None, KEY_READ, &mut roots) != ERROR_SUCCESS {
+                return out;
+            }
+            for i in 0.. {
+                let mut name = vec![0u16; 600];
+                let mut len = name.len() as u32;
+                if RegEnumKeyExW(roots, i, Some(PWSTR(name.as_mut_ptr())), &mut len, None, None, None, None) != ERROR_SUCCESS {
+                    break;
+                }
+                let id = String::from_utf16_lossy(&name[..len as usize]);
+                if !id.starts_with(&mine) {
+                    continue;
+                }
+                let Some(folder) = read_text(roots, &format!(r"{id}\UserSyncRoots"), &sid) else { continue };
+                out.push((
+                    id.clone(),
+                    PathBuf::from(folder),
+                    read_text(roots, &id, "DisplayNameResource").unwrap_or_default(),
+                    read_text(roots, &id, "IconResource").unwrap_or_default(),
+                ));
+            }
+            let _ = RegCloseKey(roots);
+        }
+        out
     }
 
     fn same(a: &Path, b: &Path) -> bool {
@@ -151,20 +193,19 @@ mod imp {
     }
 
     pub fn shown() -> Vec<Shown> {
-        ours()
-            .iter()
-            .filter_map(|r| {
-                Some(Shown {
-                    folder: folder_of(r)?,
-                    name: r.DisplayNameResource().ok()?.to_string(),
-                    icon: r.IconResource().ok()?.to_string(),
-                })
-            })
-            .collect()
+        ours().into_iter().map(|(_, folder, name, icon)| Shown { folder, name, icon }).collect()
+    }
+
+    /// Whether this edition of Windows has File Explorer's cloud features at all.
+    fn supported() -> bool {
+        init();
+        StorageProviderSyncRootManager::IsSupported().unwrap_or(false)
     }
 
     pub fn show(folder: &Path, key: &str, name: &str, icon: &str) -> Result<()> {
-        init();
+        if !supported() {
+            anyhow::bail!("this edition of Windows cannot list a synchronized folder in File Explorer");
+        }
         let id = root_id(key)?;
         let place = StorageFolder::GetFolderFromPathAsync(&HSTRING::from(folder.as_os_str()))?
             .join()
@@ -195,9 +236,10 @@ mod imp {
     }
 
     pub fn hide(folder: &Path) -> Result<()> {
-        for r in ours() {
-            if folder_of(&r).is_some_and(|f| same(&f, folder)) {
-                StorageProviderSyncRootManager::Unregister(&r.Id()?)?;
+        for (id, at, _, _) in ours() {
+            if same(&at, folder) {
+                init();
+                StorageProviderSyncRootManager::Unregister(&HSTRING::from(&id))?;
             }
         }
         Ok(())

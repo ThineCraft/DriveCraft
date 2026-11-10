@@ -144,6 +144,36 @@ struct Download {
     rel: String,
 }
 
+/// How far along a batch of transfers is, and how long it should still take.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct Moving {
+    /// "downloaded" or "uploaded".
+    pub verb: &'static str,
+    pub done: u64,
+    pub total: u64,
+    pub bytes: u64,
+    pub total_bytes: u64,
+    /// Seconds still to go at the recent pace; `None` until there is a pace to go by.
+    pub seconds_left: Option<f64>,
+    pub files_per_second: f64,
+    pub bytes_per_second: f64,
+}
+
+/// The pace is taken over this long, so the estimate follows a change of speed
+/// without jumping at every large or small file.
+const PACE_WINDOW: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// The time left at a given pace: whichever of "files to go" and "bytes to go" says
+/// longer, since either can be what holds a transfer up.
+pub fn time_left(files_left: u64, bytes_left: u64, files_per_second: f64, bytes_per_second: f64) -> Option<f64> {
+    let by_files = (files_per_second > 0.0).then(|| files_left as f64 / files_per_second);
+    let by_bytes = (bytes_per_second > 0.0 && bytes_left > 0).then(|| bytes_left as f64 / bytes_per_second);
+    match (by_files, by_bytes) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    }
+}
+
 /// Periodic "how far along" lines for long transfers: count, rate and time left.
 struct Progress {
     verb: &'static str,
@@ -151,6 +181,9 @@ struct Progress {
     total_bytes: u64,
     started: std::time::Instant,
     last: std::time::Instant,
+    /// When, and how far along, at moments in the last few minutes.
+    recent: std::collections::VecDeque<(std::time::Instant, usize, u64)>,
+    told: Option<std::time::Instant>,
 }
 
 impl Progress {
@@ -164,7 +197,45 @@ impl Progress {
             total_bytes,
             started: now,
             last: now,
+            recent: std::collections::VecDeque::from([(now, 0, 0)]),
+            told: None,
         }
+    }
+
+    /// The numbers behind the progress shown to the user, at most once a second.
+    fn moving(&mut self, done: usize, bytes: u64) -> Option<Moving> {
+        let now = std::time::Instant::now();
+        if done < self.total && self.told.is_some_and(|t| now.duration_since(t) < std::time::Duration::from_secs(1)) {
+            return None;
+        }
+        self.told = Some(now);
+        self.recent.push_back((now, done, bytes));
+        while self.recent.len() > 2 && self.recent.front().is_some_and(|s| now.duration_since(s.0) > PACE_WINDOW) {
+            self.recent.pop_front();
+        }
+        let (from, done_then, bytes_then) = *self.recent.front().expect("never empty");
+        let secs = now.duration_since(from).as_secs_f64();
+        // Too little time to judge a pace by: say so rather than guess.
+        let (files_per_second, bytes_per_second) = if secs < 5.0 {
+            (0.0, 0.0)
+        } else {
+            ((done - done_then) as f64 / secs, bytes.saturating_sub(bytes_then) as f64 / secs)
+        };
+        Some(Moving {
+            verb: self.verb,
+            done: done as u64,
+            total: self.total as u64,
+            bytes,
+            total_bytes: self.total_bytes,
+            seconds_left: time_left(
+                (self.total - done.min(self.total)) as u64,
+                self.total_bytes.saturating_sub(bytes),
+                files_per_second,
+                bytes_per_second,
+            ),
+            files_per_second,
+            bytes_per_second,
+        })
     }
 
     fn tick(&mut self, done: usize, bytes: u64) -> Option<String> {
@@ -212,6 +283,7 @@ pub struct Engine<'a, R: Remote> {
     opts: Options,
     report: Report,
     log: Box<dyn Fn(&str) + 'a>,
+    on_progress: Box<dyn Fn(&Moving) + 'a>,
     root: PathBuf,
     server_prefix_len: usize,
     /// The folder is listed in File Explorer, which shows a status beside each item.
@@ -231,6 +303,7 @@ impl<'a, R: Remote> Engine<'a, R> {
             opts,
             report: Report::default(),
             log: Box::new(|_| {}),
+            on_progress: Box::new(|_| {}),
             in_explorer: crate::explorer::shown_as(&root).is_some(),
             root,
             server_prefix_len,
@@ -240,6 +313,12 @@ impl<'a, R: Remote> Engine<'a, R> {
     /// Receive a line for every action taken (or, in a dry run, that would be taken).
     pub fn with_log(mut self, log: impl Fn(&str) + 'a) -> Self {
         self.log = Box::new(log);
+        self
+    }
+
+    /// Receive how far along the transfers are, about once a second while they run.
+    pub fn with_progress(mut self, on_progress: impl Fn(&Moving) + 'a) -> Self {
+        self.on_progress = Box::new(on_progress);
         self
     }
 
@@ -872,6 +951,9 @@ impl<'a, R: Remote> Engine<'a, R> {
                             if let Some(line) = progress.tick(done, self.report.bytes_down) {
                                 (self.log)(&line);
                             }
+                            if let Some(m) = progress.moving(done, self.report.bytes_down) {
+                                (self.on_progress)(&m);
+                            }
                         }
                         Err(e) => {
                             let _ = std::fs::remove_file(&tmp);
@@ -1371,6 +1453,9 @@ impl<'a, R: Remote> Engine<'a, R> {
                     if let Some(line) = progress.tick(done, self.report.bytes_up) {
                         (self.log)(&line);
                     }
+                    if let Some(m) = progress.moving(done, self.report.bytes_up) {
+                        (self.on_progress)(&m);
+                    }
                 }
                 Err(RemoteError::Conflict(_)) => {
                     self.report.conflicts += 1;
@@ -1636,5 +1721,21 @@ async fn fetch_verified<R: Remote>(
         ))
     } else {
         Err(RemoteError::Other("the download did not verify".into()))
+    }
+}
+
+#[cfg(test)]
+mod pace_tests {
+    use super::time_left;
+
+    #[test]
+    fn the_estimate_takes_whichever_of_files_and_bytes_says_longer() {
+        // Many small files: the count is what takes the time.
+        assert_eq!(time_left(1000, 1_000_000, 5.0, 10_000_000.0), Some(200.0));
+        // A few large ones: the bytes are.
+        assert_eq!(time_left(2, 4_000_000_000, 5.0, 10_000_000.0), Some(400.0));
+        // No pace yet: no estimate, rather than a wrong one.
+        assert_eq!(time_left(1000, 1_000_000, 0.0, 0.0), None);
+        assert_eq!(time_left(0, 0, 5.0, 10_000_000.0), Some(0.0));
     }
 }

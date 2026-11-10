@@ -531,3 +531,26 @@ async fn problems_are_kept_until_they_are_no_longer_true() {
     assert_eq!(listed(), vec![(Kind::Stopped, String::new())]);
     assert!(rig.cat.problems(id).unwrap()[0].message.contains("is missing"));
 }
+
+// --------------------------------------------------------------- Progress --
+
+#[tokio::test]
+async fn transfers_report_how_far_along_they_are() {
+    let rig = Rig::new(Mode::Archive);
+    for i in 0..6 {
+        rig.remote.put(&format!("f{i}.txt"), format!("file number {i}").as_bytes());
+    }
+    let seen = std::cell::RefCell::new(Vec::new());
+    let conn = rig.cat.connection("lib").unwrap().unwrap();
+    let r = Engine::new(&rig.cat, &rig.remote, conn, Options::default())
+        .with_progress(|m| seen.borrow_mut().push(m.clone()))
+        .run()
+        .await
+        .unwrap();
+    assert_eq!(r.downloaded, 6);
+    let seen = seen.into_inner();
+    let last = seen.last().expect("at least the final report");
+    assert_eq!((last.verb, last.done, last.total), ("downloaded", 6, 6), "the last report says it is finished");
+    assert_eq!(last.total_bytes, 6 * "file number 0".len() as u64);
+    assert!(seen.windows(2).all(|w| w[0].done <= w[1].done), "it never goes backwards");
+}

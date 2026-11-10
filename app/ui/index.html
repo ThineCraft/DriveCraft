@@ -34,6 +34,7 @@
       <symbol id="i-details" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h6M9 16h6"/></symbol>
       <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></symbol>
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.2 2"/></symbol>
       <symbol id="i-min" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
       <filter id="motion" x="-5%" y="-12%" width="110%" height="124%"><feGaussianBlur id="motion-amount" stdDeviation="0 0"/></filter>
     </defs>
@@ -44,7 +45,7 @@
     <div class="brand" data-tauri-drag-region>
       <span class="logo" aria-hidden="true">D</span>
       <span class="brand-text" data-tauri-drag-region>
-        <span class="brand-name">DriveCraft <span class="ver" id="version"></span><span class="tag">Prototype</span></span>
+        <span class="brand-name"><button class="brand-link" id="brand-link" title="Open drive.thinecraft.io in your browser">DriveCraft</button> <span class="ver" id="version"></span><span class="tag">Prototype</span></span>
         <span class="tagline">Your files. In step.</span>
       </span>
     </div>
@@ -235,6 +236,15 @@
           </button>
           <button class="btn amber" id="run-preview" title="Show what would happen without changing anything"><svg class="ic"><use href="#i-preview"/></svg>Preview changes</button>
           <label class="check" id="update-wrap" hidden><input type="checkbox" id="run-update"> Upload new versions of changed files</label>
+        </div>
+
+        <div class="progress" id="progress" hidden role="status">
+          <div class="progress-top">
+            <span class="progress-left"><svg class="ic"><use href="#i-clock"/></svg><span id="progress-left"></span></span>
+            <span class="muted" id="progress-until"></span>
+          </div>
+          <div class="progress-bar" aria-hidden="true"><div id="progress-fill"></div></div>
+          <div class="progress-bottom muted small"><span id="progress-count"></span><span id="progress-rate"></span></div>
         </div>
 
         <p class="banner warn" id="readonly-note" hidden></p>

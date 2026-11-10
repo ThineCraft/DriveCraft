@@ -135,6 +135,13 @@ struct LibraryView {
 }
 
 #[derive(Serialize, Clone)]
+struct Progressing {
+    name: String,
+    #[serde(flatten)]
+    moving: drivecraft::engine::Moving,
+}
+
+#[derive(Serialize, Clone)]
 struct LogLine {
     name: String,
     line: String,
@@ -973,6 +980,12 @@ async fn publish_seed(app: AppHandle, name: String) -> Result<drivecraft::seed::
     .await
 }
 
+/// Open DriveCraft's web site in the browser. The address is fixed here.
+#[tauri::command]
+fn open_site() -> Result<(), String> {
+    open::that("https://drive.thinecraft.io").map_err(|e| e.to_string())
+}
+
 /// Open the folder that holds DriveCraft's log files.
 #[tauri::command]
 async fn open_logs() -> Result<(), String> {
@@ -1062,7 +1075,17 @@ async fn run_sync(app: AppHandle, name: String, opts: Options) -> Finished {
             }
         };
         graph.set_event_hook(show.clone());
-        let outcome = Engine::new(cat, &graph, conn.clone(), opts).with_log(show.clone()).run().await;
+        let tell = {
+            let (emitter, name) = (emitter.clone(), conn_name.clone());
+            move |m: &drivecraft::engine::Moving| {
+                let _ = emitter.emit("sync-progress", Progressing { name: name.clone(), moving: m.clone() });
+            }
+        };
+        let outcome = Engine::new(cat, &graph, conn.clone(), opts)
+            .with_log(show.clone())
+            .with_progress(tell)
+            .run()
+            .await;
         if outcome.is_ok() && !dry_run {
             if let Err(e) = drivecraft::checkouts::refresh(cat, &graph, &conn).await {
                 log.line(&format!("could not list checked-out files: {e:#}"));
@@ -1355,6 +1378,7 @@ fn main() {
             disconnect,
             open_connection,
             open_logs,
+            open_site,
             list_problems,
             dismiss_problems,
             show_problem,
