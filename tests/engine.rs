@@ -487,3 +487,47 @@ async fn ingest_preview_counts_every_folder_and_changes_nothing() {
     assert_eq!(r.uploaded, 2);
     assert_eq!(rig.remote.writes(), 0);
 }
+
+// --------------------------------------------------------------- Problems --
+
+#[tokio::test]
+async fn problems_are_kept_until_they_are_no_longer_true() {
+    use drivecraft::problems::Kind;
+    let rig = Rig::new(Mode::Sync);
+    let id = rig.cat.connection("lib").unwrap().unwrap().id;
+    let listed = || -> Vec<(Kind, String)> {
+        rig.cat.problems(id).unwrap().into_iter().map(|p| (p.kind, p.path)).collect()
+    };
+    rig.remote.put("report.txt", b"server version");
+    rig.write("report.txt", "my version");
+    rig.write("my_vti_notes.txt", "a name the server refuses");
+
+    let r = rig.run().await;
+    assert_eq!(r.failed, 0, "{:?}", r.warnings);
+    assert_eq!(
+        listed(),
+        vec![(Kind::CopyKept, "report.txt".to_string()), (Kind::NotUploaded, "my_vti_notes.txt".to_string())]
+    );
+
+    // A preview records nothing and clears nothing.
+    std::fs::rename(rig.path("my_vti_notes.txt"), rig.path("notes.txt")).unwrap();
+    rig.run_with(Options { dry_run: true, ..Default::default() }).await;
+    assert_eq!(listed().len(), 2);
+
+    // The renamed file goes up, so that problem is over. The kept copy is still there.
+    let r = rig.run().await;
+    assert_eq!(r.uploaded, 1, "{:?}", r.warnings);
+    assert_eq!(listed(), vec![(Kind::CopyKept, "report.txt".to_string())]);
+
+    // Dealing with the copy ends the last one.
+    std::fs::remove_file(rig.path("report (local copy).txt")).unwrap();
+    rig.run().await;
+    assert_eq!(listed(), vec![]);
+
+    // A run that cannot start is itself a problem, until one finishes.
+    std::fs::remove_dir_all(rig.local()).unwrap();
+    let conn = rig.cat.connection("lib").unwrap().unwrap();
+    assert!(Engine::new(&rig.cat, &rig.remote, conn, Options::default()).run().await.is_err());
+    assert_eq!(listed(), vec![(Kind::Stopped, String::new())]);
+    assert!(rig.cat.problems(id).unwrap()[0].message.contains("is missing"));
+}

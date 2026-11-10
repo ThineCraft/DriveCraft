@@ -2,7 +2,9 @@
 //! work, and (later) ShareCraft.
 
 pub mod catalog;
+pub mod checkouts;
 pub mod engine;
+pub mod explorer;
 pub mod paths;
 pub mod quickxor;
 pub mod remote;
@@ -13,4 +15,5 @@ pub mod home;
 pub mod runlog;
 pub mod net;
 pub mod pace;
+pub mod problems;
 pub mod seed;

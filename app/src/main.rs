@@ -25,7 +25,20 @@ struct Shared {
     gate: tokio::sync::Mutex<()>,
     running: std::sync::Mutex<Option<String>>,
     auto_sync: AtomicBool,
+    /// When each connection last finished a run. A run's own writes to the folder
+    /// must not be taken for the user's changes.
+    finished: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    /// The folders DriveCraft is looking after in File Explorer. Windows shows their
+    /// status icons only while these are held.
+    links: std::sync::Mutex<std::collections::HashMap<PathBuf, drivecraft::explorer::Link>>,
 }
+
+/// Arguments File Explorer's right-click menu starts DriveCraft with.
+const CHECK_OUT_ARG: &str = "--check-out";
+const CHECK_IN_ARG: &str = "--check-in";
+
+/// The argument Windows starts DriveCraft with at sign-in: straight to the tray.
+const HIDDEN_ARG: &str = "--hidden";
 
 /// Run core work on its own thread. The catalog is not shareable across threads, so
 /// each operation gets a thread and a small runtime of its own.
@@ -74,6 +87,12 @@ struct ConnView {
     first_scan: &'static str,
     last_sync: Option<i64>,
     syncing: bool,
+    /// How many recorded problems, by how serious they are.
+    problems: drivecraft::problems::Tally,
+    /// How the folder is listed in File Explorer, when it is.
+    explorer: Option<drivecraft::explorer::Shown>,
+    /// How many files are checked out in the library, and how many by this user.
+    checked_out: drivecraft::checkouts::Count,
 }
 
 #[derive(Serialize)]
@@ -87,6 +106,8 @@ struct StateView {
     is_windows: bool,
     long_paths: Option<bool>,
     auto_sync: bool,
+    /// Whether DriveCraft starts when the user signs in to the computer.
+    autostart: bool,
     /// The connection DriveCraft is sending through, and the ones it could use.
     link: drivecraft::net::ActiveLink,
     links: Vec<drivecraft::net::Link>,
@@ -122,7 +143,12 @@ struct Finished {
     details: Vec<String>,
 }
 
-fn conn_view(cat: &drivecraft::catalog::Catalog, c: &Connection, running: &Option<String>) -> anyhow::Result<ConnView> {
+fn conn_view(
+    cat: &drivecraft::catalog::Catalog,
+    c: &Connection,
+    running: &Option<String>,
+    shown: &[drivecraft::explorer::Shown],
+) -> anyhow::Result<ConnView> {
     let n = cat.counts(c.id)?;
     Ok(ConnView {
         name: c.name.clone(),
@@ -144,7 +170,218 @@ fn conn_view(cat: &drivecraft::catalog::Catalog, c: &Connection, running: &Optio
         },
         last_sync: c.last_sync,
         syncing: running.as_deref() == Some(c.name.as_str()),
+        problems: cat.problem_tally(c.id)?,
+        explorer: shown.iter().find(|s| same_folder(&s.folder, &c.local_path)).cloned(),
+        checked_out: cat.checkout_count(c.id)?,
     })
+}
+
+fn same_folder(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let tidy = |p: &std::path::Path| p.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
+    tidy(a) == tidy(b)
+}
+
+/// Bring File Explorer in line with the connections: hold a link to every folder
+/// listed there, let go of the rest, and offer the right-click menu inside them.
+fn tend_explorer(app: &AppHandle) {
+    let shown = drivecraft::explorer::shown();
+    let conns = Home::locate().and_then(|h| h.catalog()).and_then(|c| c.connections()).unwrap_or_default();
+    let folders: Vec<PathBuf> = conns
+        .iter()
+        .map(|c| c.local_path.clone())
+        .filter(|f| f.is_dir() && shown.iter().any(|s| same_folder(&s.folder, f)))
+        .collect();
+    let shared = app.state::<Shared>();
+    let mut links = shared.links.lock().unwrap();
+    links.retain(|f, _| folders.contains(f));
+    for f in &folders {
+        if !links.contains_key(f) {
+            match drivecraft::explorer::connect(f) {
+                Ok(link) => {
+                    links.insert(f.clone(), link);
+                }
+                Err(e) => eprintln!("could not look after {} in File Explorer: {e:#}", f.display()),
+            }
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = drivecraft::explorer::set_menu(&exe, &folders);
+    }
+}
+
+/// List a library's folder in File Explorer with status icons, or take it out again.
+#[tauri::command]
+async fn set_explorer(
+    app: AppHandle,
+    name: String,
+    enabled: bool,
+    label: Option<String>,
+    icon: Option<String>,
+) -> Result<drivecraft::explorer::Marked, String> {
+    let shared = app.state::<Shared>();
+    // Not while a run is moving files about.
+    let _turn = shared.gate.lock().await;
+    // Windows will not change a folder's listing while it is being looked after.
+    shared.links.lock().unwrap().clear();
+    let done = local(move || async move {
+        use drivecraft::explorer;
+        let cat = Home::locate()?.catalog()?;
+        let c = cat.connection(&name)?.ok_or_else(|| anyhow!("no connection named '{name}'"))?;
+        if !enabled {
+            return explorer::turn_off(&c);
+        }
+        let now = explorer::shown_as(&c.local_path);
+        let label = label.map(|l| l.trim().to_string()).filter(|l| !l.is_empty());
+        let label = label.or(now.as_ref().map(|s| s.name.clone())).unwrap_or(c.name.clone());
+        let icon = icon.or(now.map(|s| s.icon)).unwrap_or_else(explorer::default_icon);
+        explorer::turn_on(&cat, &c, &label, &icon)
+    })
+    .await;
+    tend_explorer(&app);
+    done
+}
+
+#[tauri::command]
+async fn pick_icon() -> Result<Option<String>, String> {
+    let picked = rfd::AsyncFileDialog::new()
+        .set_title("Choose an icon for this folder")
+        .add_filter("Icons", &["ico"])
+        .pick_file()
+        .await;
+    Ok(picked.map(|f| f.path().display().to_string()))
+}
+
+#[derive(Serialize, Clone)]
+struct Notice {
+    text: String,
+    good: bool,
+}
+
+/// Tell the user something that happened while the window may be out of sight.
+fn tell(app: &AppHandle, title: &str, text: &str, good: bool) {
+    use tauri_plugin_notification::NotificationExt;
+    let _ = app.notification().builder().title(title).body(text).show();
+    tray_says(app, &format!("DriveCraft: {title}: {text}"));
+    let _ = app.emit("notice", Notice { text: format!("{title}: {text}"), good });
+}
+
+/// What File Explorer's right-click menu asked for, if these arguments are from it.
+fn menu_request(args: &[String]) -> Option<(bool, PathBuf)> {
+    let at = args.iter().position(|a| a == CHECK_OUT_ARG || a == CHECK_IN_ARG)?;
+    Some((args[at] == CHECK_OUT_ARG, PathBuf::from(args.get(at + 1)?)))
+}
+
+#[derive(Serialize)]
+struct BinPage {
+    /// The library's own path on the server; items carry the folder they came from.
+    library_path: String,
+    items: Vec<drivecraft::graph::Binned>,
+    /// Where the next page starts; `None` when this was the last.
+    next: Option<String>,
+}
+
+/// One page of the recycle bin of a library's site, newest deletions first. The
+/// interface asks for the first page, then for each `next` it is handed, so it can
+/// show and search what has arrived while the rest is still coming.
+#[tauri::command]
+async fn bin_page(name: String, library_path: Option<String>, next: Option<String>) -> Result<BinPage, String> {
+    local(move || async move {
+        let home = Home::locate()?;
+        let cat = home.catalog()?;
+        let c = cat.connection(&name)?.ok_or_else(|| anyhow!("no connection named '{name}'"))?;
+        let graph = home.graph()?;
+        let site = match (&next, library_path) {
+            // A later page: the link already says which site.
+            (Some(_), Some(library_path)) => drivecraft::graph::SiteRef { key: String::new(), library_path },
+            _ => graph.site_of(&c.drive_id).await?,
+        };
+        let (items, next) = graph.recycle_bin_page(&site, next.as_deref()).await?;
+        Ok(BinPage { library_path: site.library_path, items, next })
+    })
+    .await
+}
+
+/// Put items from the recycle bin back where they were deleted from.
+#[tauri::command]
+async fn restore_bin(name: String, ids: Vec<String>) -> Result<(), String> {
+    local(move || async move {
+        let home = Home::locate()?;
+        let cat = home.catalog()?;
+        let c = cat.connection(&name)?.ok_or_else(|| anyhow!("no connection named '{name}'"))?;
+        let auth = home.authenticator()?;
+        let tokens = auth.current().await.ok_or_else(|| anyhow!("You are not signed in."))?;
+        if !tokens.can_write() {
+            bail!("Restoring changes the library, which needs write access. Sign in again with write access.");
+        }
+        let graph = drivecraft::graph::GraphClient::new(auth);
+        let site = graph.site_of(&c.drive_id).await?;
+        // A few at a time, so one request is never too large for the server.
+        for some in ids.chunks(20) {
+            graph.restore_binned(&site, some).await?;
+        }
+        if let Ok(log) = RunLog::open(&home.dir) {
+            log.line(&format!("restored {} item(s) from the recycle bin of {}", ids.len(), c.name));
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// The files checked out in a library, as last reported by the server.
+#[tauri::command]
+async fn list_checkouts(name: String, ask_server: bool) -> Result<Vec<drivecraft::checkouts::Listed>, String> {
+    local(move || async move {
+        let home = Home::locate()?;
+        let cat = home.catalog()?;
+        let c = cat.connection(&name)?.ok_or_else(|| anyhow!("no connection named '{name}'"))?;
+        if ask_server {
+            drivecraft::checkouts::refresh(&cat, &home.graph()?, &c).await?;
+        }
+        cat.checkouts(c.id)
+    })
+    .await
+}
+
+/// Check a file of a library out or in, from the app's own list.
+#[tauri::command]
+async fn check_file(app: AppHandle, name: String, path: String, out: bool, comment: String) -> Result<(), String> {
+    let folder = local(move || async move {
+        let cat = Home::locate()?.catalog()?;
+        let c = cat.connection(&name)?.ok_or_else(|| anyhow!("no connection named '{name}'"))?;
+        Ok(c.local_path)
+    })
+    .await?;
+    check(app, out, drivecraft::paths::join_rel(&folder, &path), comment).await;
+    Ok(())
+}
+
+/// Check a file out or back in, and say how it went.
+async fn check(app: AppHandle, out: bool, file: PathBuf, comment: String) {
+    let done = local(move || async move {
+        let home = Home::locate()?;
+        let (conn, id, rel) = home::locate_file(&home, &file)?;
+        let graph = home.graph()?;
+        if out {
+            graph.check_out(&conn.drive_id, &id).await?;
+        } else {
+            graph.check_in(&conn.drive_id, &id, &comment).await?;
+        }
+        // Show it at once; the next synchronization confirms it with the server.
+        let cat = home.catalog()?;
+        let before = cat.checkouts(conn.id)?;
+        let me = if out { Some(graph.me().await.map(|(n, _)| n).unwrap_or_default()) } else { None };
+        cat.note_checkout(conn.id, &id, me.as_deref(), drivecraft::problems::unix_now())?;
+        let _ = drivecraft::checkouts::show_in_explorer(&cat, &conn, &before);
+        if let Ok(log) = RunLog::open(&home.dir) {
+            log.line(&format!("{} {rel} in {}", if out { "checked out" } else { "checked in" }, conn.name));
+        }
+        Ok(rel)
+    })
+    .await;
+    match done {
+        Ok(rel) => tell(&app, if out { "Checked out" } else { "Checked in" }, &rel, true),
+        Err(e) => tell(&app, if out { "Could not check out" } else { "Could not check in" }, &e, false),
+    }
 }
 
 fn ui_settings_path(home: &Home) -> PathBuf {
@@ -167,7 +404,12 @@ async fn get_state(app: AppHandle) -> Result<StateView, String> {
     let shared = app.state::<Shared>();
     let running = shared.running.lock().unwrap().clone();
     let auto_sync = shared.auto_sync.load(Ordering::Relaxed);
+    let autostart = {
+        use tauri_plugin_autostart::ManagerExt;
+        app.autolaunch().is_enabled().unwrap_or(false)
+    };
     local(move || async move {
+        let shown = drivecraft::explorer::shown();
         let home = Home::locate()?;
         let setup = home.app().ok().map(|a| SetupView {
             client_id: a.client_id,
@@ -180,7 +422,7 @@ async fn get_state(app: AppHandle) -> Result<StateView, String> {
         let cat = home.catalog()?;
         let mut connections = Vec::new();
         for c in cat.connections()? {
-            connections.push(conn_view(&cat, &c, &running)?);
+            connections.push(conn_view(&cat, &c, &running, &shown)?);
         }
         Ok(StateView {
             version: env!("CARGO_PKG_VERSION"),
@@ -192,6 +434,7 @@ async fn get_state(app: AppHandle) -> Result<StateView, String> {
             is_windows: cfg!(windows),
             long_paths: sysinfo::windows_long_paths_enabled(),
             auto_sync,
+            autostart,
             link: drivecraft::net::active_link(),
             links: drivecraft::net::links(),
         })
@@ -306,14 +549,21 @@ async fn set_mode(name: String, mode: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn disconnect(name: String) -> Result<(), String> {
-    local(move || async move {
+async fn disconnect(app: AppHandle, name: String) -> Result<(), String> {
+    let shared = app.state::<Shared>();
+    let _turn = shared.gate.lock().await;
+    shared.links.lock().unwrap().clear();
+    let done = local(move || async move {
         let cat = Home::locate()?.catalog()?;
         let c = cat.connection(&name)?.ok_or_else(|| anyhow!("no connection named '{name}'"))?;
+        // The folder goes back to being an ordinary one in File Explorer.
+        drivecraft::explorer::turn_off(&c)?;
         cat.remove_connection(c.id)?;
         Ok(())
     })
-    .await
+    .await;
+    tend_explorer(&app);
+    done
 }
 
 /// Open a connection's local folder in the file manager, or its library in the browser.
@@ -337,6 +587,71 @@ async fn open_connection(name: String, target: String) -> Result<(), String> {
                 open::that(&c.web_url)?;
             }
             _ => bail!("unknown target"),
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// What needs the user's attention in a library, the most serious first.
+#[tauri::command]
+async fn list_problems(name: String) -> Result<Vec<drivecraft::problems::Stored>, String> {
+    local(move || async move {
+        let cat = Home::locate()?.catalog()?;
+        let c = cat.connection(&name)?.ok_or_else(|| anyhow!("no connection named '{name}'"))?;
+        cat.prune_problems(&c)?;
+        cat.problems(c.id)
+    })
+    .await
+}
+
+/// Forget one notice, or (with no kind) every notice of the library. Only the ones
+/// that stay until dismissed can be forgotten; the rest clear when they are fixed.
+#[tauri::command]
+async fn dismiss_problems(name: String, kind: Option<String>, path: Option<String>) -> Result<(), String> {
+    local(move || async move {
+        let cat = Home::locate()?.catalog()?;
+        let c = cat.connection(&name)?.ok_or_else(|| anyhow!("no connection named '{name}'"))?;
+        match kind {
+            Some(kind) => {
+                let kind = drivecraft::problems::Kind::parse(&kind).ok_or_else(|| anyhow!("unknown kind of problem"))?;
+                cat.dismiss_problem(c.id, kind, path.as_deref().unwrap_or_default())?;
+            }
+            None => {
+                cat.dismiss_lasting(c.id)?;
+            }
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// Show the item a problem is about in the file manager.
+#[tauri::command]
+async fn show_problem(name: String, path: String) -> Result<(), String> {
+    local(move || async move {
+        use std::path::Component;
+        let cat = Home::locate()?.catalog()?;
+        let c = cat.connection(&name)?.ok_or_else(|| anyhow!("no connection named '{name}'"))?;
+        // Only ever somewhere inside the library's own folder.
+        let inside = !path.is_empty()
+            && std::path::Path::new(&path).components().all(|p| matches!(p, Component::Normal(_)));
+        let mut target = if inside {
+            drivecraft::paths::join_rel(&c.local_path, &path)
+        } else {
+            c.local_path.clone()
+        };
+        // The item itself may be gone; show the nearest folder that is still there.
+        while !target.exists() {
+            match target.parent() {
+                Some(p) if p.starts_with(&c.local_path) => target = p.to_path_buf(),
+                _ => bail!("{} was not found", c.local_path.display()),
+            }
+        }
+        if cfg!(windows) && target != c.local_path {
+            std::process::Command::new("explorer").arg("/select,").arg(&target).spawn()?;
+        } else {
+            open::that(&target)?;
         }
         Ok(())
     })
@@ -408,10 +723,25 @@ async fn set_auto_sync(app: AppHandle, enabled: bool) -> Result<(), String> {
     .await
 }
 
+/// Start DriveCraft, in the tray, whenever the user signs in to this computer.
+#[tauri::command]
+fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let auto = app.autolaunch();
+    if enabled { auto.enable() } else { auto.disable() }.map_err(|e| e.to_string())
+}
+
+fn tray_says(app: &AppHandle, text: &str) {
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(text));
+    }
+}
+
 async fn run_sync(app: AppHandle, name: String, opts: Options) -> Finished {
     let shared = app.state::<Shared>();
     let _turn = shared.gate.lock().await;
     *shared.running.lock().unwrap() = Some(name.clone());
+    tray_says(&app, &format!("DriveCraft: synchronizing {name}"));
     let _ = app.emit("sync-started", name.clone());
 
     let dry_run = opts.dry_run;
@@ -423,6 +753,9 @@ async fn run_sync(app: AppHandle, name: String, opts: Options) -> Finished {
         let conn = cat
             .connection(&conn_name)?
             .ok_or_else(|| anyhow!("no connection named '{conn_name}'"))?;
+        let conn_id = conn.id;
+        let cat = &cat;
+        let work = async move {
         let auth = home.authenticator()?;
         let tokens = auth.current().await.ok_or_else(|| anyhow!("You are not signed in."))?;
         if conn.mode != Mode::Archive && !tokens.can_write() && !opts.dry_run {
@@ -456,7 +789,12 @@ async fn run_sync(app: AppHandle, name: String, opts: Options) -> Finished {
             }
         };
         graph.set_event_hook(show.clone());
-        let outcome = Engine::new(&cat, &graph, conn, opts).with_log(show.clone()).run().await;
+        let outcome = Engine::new(cat, &graph, conn.clone(), opts).with_log(show.clone()).run().await;
+        if outcome.is_ok() && !dry_run {
+            if let Err(e) = drivecraft::checkouts::refresh(cat, &graph, &conn).await {
+                log.line(&format!("could not list checked-out files: {e:#}"));
+            }
+        }
         let report = match outcome {
             Ok(r) => r,
             Err(e) => {
@@ -473,10 +811,26 @@ async fn run_sync(app: AppHandle, name: String, opts: Options) -> Finished {
             log.line(line);
         }
         Ok((report, graph.times_throttled(), details))
+        };
+        let outcome = work.await;
+        // A run that could not even start (not signed in, say) is a problem to show.
+        if let (Err(e), false) = (&outcome, dry_run) {
+            let _ = cat.record_stopped(conn_id, &format!("{e:#}"), drivecraft::problems::unix_now());
+        }
+        outcome
     })
     .await;
 
+    shared.finished.lock().unwrap().insert(name.clone(), std::time::Instant::now());
     *shared.running.lock().unwrap() = None;
+    tray_says(
+        &app,
+        &match &outcome {
+            Ok((r, _, _)) if r.failed == 0 => format!("DriveCraft: {name} is up to date"),
+            Ok((r, _, _)) => format!("DriveCraft: {name} finished with {} problems", r.failed),
+            Err(_) => format!("DriveCraft: {name} could not synchronize"),
+        },
+    );
     let finished = match outcome {
         Ok((report, throttled, details)) => Finished {
             name,
@@ -511,10 +865,17 @@ async fn sync(app: AppHandle, name: String, dry_run: bool, confirm_deletes: bool
     Ok(run_sync(app, name, opts).await)
 }
 
-async fn sync_all(app: AppHandle) {
-    let names = local(|| async {
+/// Synchronize every library. In the background (`unattended`) an ingest is left
+/// alone: bringing a folder into a library is something the user starts.
+async fn sync_all(app: AppHandle, unattended: bool) {
+    let names = local(move || async move {
         let cat = Home::locate()?.catalog()?;
-        Ok(cat.connections()?.into_iter().map(|c| c.name).collect::<Vec<_>>())
+        Ok(cat
+            .connections()?
+            .into_iter()
+            .filter(|c| !(unattended && c.mode == Mode::Ingest))
+            .map(|c| c.name)
+            .collect::<Vec<_>>())
     })
     .await
     .unwrap_or_default();
@@ -529,8 +890,105 @@ async fn sync_all(app: AppHandle) {
 
 #[tauri::command]
 async fn sync_everything(app: AppHandle) -> Result<(), String> {
-    sync_all(app).await;
+    sync_all(app, false).await;
     Ok(())
+}
+
+/// Watch the folders of two-way connections, and synchronize one shortly after
+/// something in it changes. Runs only while "keep in sync" is on.
+fn watch_folders(app: AppHandle) {
+    use notify::Watcher;
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+    /// A change is acted on once the folder has been quiet for this long, so that a
+    /// file still being saved or a batch still being copied is sent once, whole.
+    const QUIET: Duration = Duration::from_secs(5);
+    /// Changes seen this soon after a run are the run's own downloads.
+    const OWN: Duration = Duration::from_secs(4);
+
+    std::thread::spawn(move || {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let Ok(mut watcher) = notify::recommended_watcher(tx) else { return };
+        let mut watched: HashMap<PathBuf, String> = HashMap::new();
+        let mut changed: HashMap<String, Instant> = HashMap::new();
+        let mut looked: Option<Instant> = None;
+        loop {
+            // Connections come and go; look again every so often.
+            if looked.is_none_or(|t| t.elapsed() > Duration::from_secs(20)) {
+                looked = Some(Instant::now());
+                let want: HashMap<PathBuf, String> = Home::locate()
+                    .and_then(|h| h.catalog())
+                    .and_then(|c| c.connections())
+                    .map(|l| {
+                        l.into_iter()
+                            .filter(|c| c.mode == Mode::Sync && c.local_path.is_dir())
+                            .map(|c| (c.local_path, c.name))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for gone in watched.keys().filter(|p| !want.contains_key(*p)) {
+                    let _ = watcher.unwatch(gone);
+                }
+                for (folder, name) in &want {
+                    if !watched.contains_key(folder)
+                        && watcher.watch(folder, notify::RecursiveMode::Recursive).is_err()
+                    {
+                        eprintln!("could not watch {} for {name}", folder.display());
+                    }
+                }
+                watched = want;
+            }
+            match rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(Ok(event)) => {
+                    if matches!(event.kind, notify::EventKind::Access(_)) {
+                        continue;
+                    }
+                    let shared = app.state::<Shared>();
+                    let running = shared.running.lock().unwrap().clone();
+                    for path in &event.paths {
+                        let ignored = path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .is_none_or(drivecraft::paths::is_ignored_local_name);
+                        if ignored {
+                            continue;
+                        }
+                        let Some(name) = watched.iter().find(|(f, _)| path.starts_with(f)).map(|(_, n)| n.clone())
+                        else {
+                            continue;
+                        };
+                        let own = running.as_deref() == Some(name.as_str())
+                            || shared.finished.lock().unwrap().get(&name).is_some_and(|t| t.elapsed() < OWN);
+                        if !own {
+                            changed.insert(name, Instant::now());
+                        }
+                    }
+                }
+                Ok(Err(_)) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+            if !app.state::<Shared>().auto_sync.load(Ordering::Relaxed) {
+                changed.clear();
+                continue;
+            }
+            let ready: Vec<String> = changed
+                .iter()
+                .filter(|(_, at)| at.elapsed() >= QUIET)
+                .map(|(n, _)| n.clone())
+                .collect();
+            for name in ready {
+                changed.remove(&name);
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let opts = Options {
+                        seed_dir: Home::locate().ok().map(|h| h.work_dir()),
+                        ..Default::default()
+                    };
+                    run_sync(app, name, opts).await;
+                });
+            }
+        }
+    });
 }
 
 /// Put the window away. DriveCraft keeps running from its tray icon.
@@ -549,10 +1007,26 @@ fn show_window(app: &AppHandle) {
 
 fn main() {
     tauri::Builder::default()
+        // A second copy hands over to the one already running and exits.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _dir| match menu_request(&args) {
+            // File Explorer's right-click menu: do it, without bringing the window up.
+            Some((out, file)) => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(check(app, out, file, String::new()));
+            }
+            None => show_window(app),
+        }))
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![HIDDEN_ARG]),
+        ))
         .manage(Shared {
             gate: tokio::sync::Mutex::new(()),
             running: std::sync::Mutex::new(None),
             auto_sync: AtomicBool::new(load_auto_sync()),
+            finished: Default::default(),
+            links: Default::default(),
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
@@ -567,10 +1041,20 @@ fn main() {
             disconnect,
             open_connection,
             open_logs,
+            list_problems,
+            dismiss_problems,
+            show_problem,
+            set_explorer,
+            pick_icon,
+            list_checkouts,
+            check_file,
+            bin_page,
+            restore_bin,
             set_network,
             publish_seed,
             hide_to_tray,
             set_auto_sync,
+            set_autostart,
             sync,
             sync_everything
         ])
@@ -587,7 +1071,7 @@ fn main() {
                     "open" => show_window(app),
                     "sync" => {
                         let app = app.clone();
-                        tauri::async_runtime::spawn(async move { sync_all(app).await });
+                        tauri::async_runtime::spawn(async move { sync_all(app, false).await });
                     }
                     "quit" => app.exit(0),
                     _ => {}
@@ -613,10 +1097,23 @@ fn main() {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                     if handle.state::<Shared>().auto_sync.load(Ordering::Relaxed) {
-                        sync_all(handle.clone()).await;
+                        sync_all(handle.clone(), true).await;
                     }
                 }
             });
+            watch_folders(app.handle().clone());
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || tend_explorer(&handle));
+            }
+            // Started by Windows at sign-in, or by File Explorer's right-click menu:
+            // stay in the tray. Otherwise show the window.
+            let args: Vec<String> = std::env::args().collect();
+            if let Some((out, file)) = menu_request(&args) {
+                tauri::async_runtime::spawn(check(app.handle().clone(), out, file, String::new()));
+            } else if !args.iter().any(|a| a == HIDDEN_ARG) {
+                show_window(app.handle());
+            }
             Ok(())
         })
         .on_window_event(|window, event| {

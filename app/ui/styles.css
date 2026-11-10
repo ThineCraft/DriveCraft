@@ -337,6 +337,52 @@ legend { font-weight: 600; padding: 0; margin-bottom: .2rem; }
 .segmented button { padding: .35rem 1rem; border-radius: 8px; }
 .segmented button[aria-checked=true] { background: var(--blue); color: var(--blue-ink); font-weight: 600; }
 
+.problems-bar { display: flex; align-items: center; gap: .7rem; width: 100%; text-align: left; margin-top: 1rem; padding: .7rem 1rem; border-radius: var(--radius); background: var(--warn-bg); border: 1px solid var(--warn-line); color: var(--text); }
+.problems-bar .ic { color: var(--amber-ink); flex: none; }
+.problems-bar.bad { background: var(--bad-bg); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+.problems-bar.bad .ic { color: var(--bad); }
+.problems-bar.notice { background: var(--bed-2); border-color: var(--line); }
+.problems-bar.notice .ic { color: var(--muted); }
+.problems-bar .go { margin-left: auto; color: var(--blue-soft-ink); font-weight: 600; }
+.problems-bar:hover .go { text-decoration: underline; }
+#problems-dialog { width: min(780px, calc(100vw - 2rem)); }
+.problems { max-height: 54vh; overflow: auto; margin-top: .9rem; padding-right: .3rem; user-select: text; -webkit-user-select: text; }
+.pgroup + .pgroup { margin-top: 1.2rem; }
+.pgroup h3 { display: flex; align-items: center; gap: .6rem; font-size: 1rem; margin: 0; }
+.pgroup h3 .count { color: var(--muted); font-weight: 500; font-size: .84rem; }
+.pgroup > p { margin: .3rem 0 .5rem; }
+.prow { display: flex; gap: 1rem; justify-content: space-between; align-items: flex-start; padding: .6rem .8rem; border: 1px solid var(--line); border-radius: 12px; background: var(--bed-2); margin-top: .4rem; }
+.prow-main { min-width: 0; }
+.prow-path { font-weight: 600; word-break: break-all; }
+.prow-msg { font-size: .9rem; margin: .15rem 0; white-space: pre-wrap; word-break: break-word; }
+.prow-actions { display: flex; flex-direction: column; gap: .3rem; align-items: flex-end; flex: none; user-select: none; -webkit-user-select: none; }
+
+#explorer-box { display: flex; flex-direction: column; gap: .6rem; }
+#explorer-box label.small { margin: 0; font-weight: 500; }
+.explorer-buttons { display: flex; gap: .5rem; margin-top: .5rem; }
+.pop .switch { position: relative; }
+
+#checkouts-dialog { width: min(780px, calc(100vw - 2rem)); }
+#checkouts-dialog .problems { max-height: 44vh; }
+#checkouts-comment-wrap { font-weight: 500; }
+.prow .who { color: var(--muted); font-size: .9rem; margin: .15rem 0; }
+.prow.mine { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); }
+
+.foot-links { display: inline-flex; gap: 1.2rem; }
+#bin-dialog { width: min(900px, calc(100vw - 2rem)); }
+#bin-dialog .problems { height: 46vh; max-height: 46vh; margin-top: .5rem; }
+#bin-filter { margin-top: .9rem; font-size: 1.05rem; padding: .75rem .9rem !important; }
+.bin-tools { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-top: .6rem; }
+select { padding: .45rem .6rem; border-radius: 10px; border: 1px solid var(--line); background: var(--field); color: var(--text); font: inherit; font-size: .88rem; max-width: 100%; }
+select.on { border-color: var(--blue); color: var(--blue-soft-ink); font-weight: 600; }
+#bin-status { margin: .7rem 0 0; min-height: 1.3em; }
+.bin-note { margin-right: auto; align-self: center; }
+.brow { display: grid; grid-template-columns: auto 1fr auto; gap: .8rem; align-items: center; padding: .5rem .8rem; border: 1px solid var(--line); border-radius: 12px; background: var(--bed-2); margin-top: .35rem; cursor: pointer; }
+.brow:has(input:checked) { border-color: var(--blue); background: color-mix(in srgb, var(--blue) 10%, var(--bed-2)); }
+.brow .prow-path mark, .brow .who mark { background: var(--amber-soft); color: var(--amber-ink); border-radius: 3px; padding: 0 1px; }
+.brow .meta { text-align: right; white-space: nowrap; font-size: .82rem; color: var(--muted); line-height: 1.4; }
+.bin-more { margin: .6rem auto; display: block; }
+
 /* Dialogs */
 dialog { border: 1px solid var(--line); border-radius: 22px; background: var(--bed); color: var(--text); padding: 0; width: min(580px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); box-shadow: 0 30px 80px #000a; }
 dialog::backdrop { background: #050c14b3; }

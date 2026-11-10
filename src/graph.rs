@@ -1,6 +1,6 @@
 //! Microsoft Graph: SharePoint document libraries and OneDrive for work.
 
-use crate::auth::TokenSource;
+pub use crate::auth::TokenSource;
 use crate::paths;
 use crate::quickxor::QuickXor;
 use crate::remote::*;
@@ -38,6 +38,47 @@ pub struct DriveInfo {
     pub name: String,
     pub web_url: String,
     pub drive_type: String,
+}
+
+/// How the recycle bin is asked for: as many items at a time as the server gives.
+/// Newest deletions come first, so what someone is most likely looking for arrives
+/// in the first answer.
+const BIN_PAGE: &str = "$top=1000&$orderby=deletedDateTime desc";
+
+/// The site a library belongs to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SiteRef {
+    pub key: String,
+    pub library_path: String,
+}
+
+/// Something in a site's recycle bin.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct Binned {
+    pub id: String,
+    pub name: String,
+    /// The folder it was deleted from, as a path on the server.
+    pub from: String,
+    pub size: u64,
+    /// When it was deleted, as the server writes it (UTC).
+    pub deleted_at: String,
+    pub deleted_by: String,
+}
+
+impl Binned {
+    /// Whether it was deleted from inside the library at `library_path`.
+    pub fn is_from(&self, library_path: &str) -> bool {
+        self.from == library_path
+            || self.from.strip_prefix(library_path).is_some_and(|rest| rest.starts_with('/'))
+    }
+}
+
+/// A file that is checked out in a library.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CheckedOut {
+    pub item_id: String,
+    pub by_id: String,
+    pub by_name: String,
 }
 
 pub struct GraphClient<T: TokenSource> {
@@ -363,6 +404,136 @@ impl<T: TokenSource> GraphClient<T> {
     }
 
     // ---- check out and check in ----------------------------------------------
+
+    // ---- the recycle bin ---------------------------------------------------
+    //
+    // Microsoft offers the recycle bin only through the preview ("beta") edition of
+    // its interface, which it may change. Everything that depends on it is here.
+
+    fn preview_url(&self, segments: &[&str]) -> reqwest::Url {
+        let base = match self.base.strip_suffix("/v1.0") {
+            Some(root) => format!("{root}/beta"),
+            None => self.base.clone(),
+        };
+        let mut u = reqwest::Url::parse(&base).expect("base address");
+        u.path_segments_mut().expect("base address").pop_if_empty().extend(segments);
+        u
+    }
+
+    /// The site a library belongs to: the key the server knows it by, and the
+    /// library's own path on the server (no leading slash).
+    pub async fn site_of(&self, drive_id: &str) -> RemoteResult<SiteRef> {
+        let mut u = self.url(&["drives", drive_id]);
+        u.set_query(Some("$select=id,webUrl,sharePointIds"));
+        let v = self.get_json(u).await?;
+        let ids = &v["sharePointIds"];
+        let host = ids["siteUrl"]
+            .as_str()
+            .and_then(|s| reqwest::Url::parse(s).ok())
+            .and_then(|s| s.host_str().map(String::from));
+        match (host, ids["siteId"].as_str(), ids["webId"].as_str(), v["webUrl"].as_str()) {
+            (Some(host), Some(site), Some(web), Some(web_url)) => Ok(SiteRef {
+                key: format!("{host},{site},{web}"),
+                library_path: reqwest::Url::parse(web_url)
+                    .map(|u| paths::percent_decode(u.path()).trim_matches('/').to_string())
+                    .unwrap_or_default(),
+            }),
+            _ => Err(RemoteError::Other("this library does not say which site it belongs to".into())),
+        }
+    }
+
+    /// One page of a site's recycle bin, and where the next page starts. Pass `None`
+    /// for the first page, then what the previous call returned.
+    pub async fn recycle_bin_page(&self, site: &SiteRef, next: Option<&str>) -> RemoteResult<(Vec<Binned>, Option<String>)> {
+        self.recycle_bin_query(site, next, BIN_PAGE).await
+    }
+
+    async fn recycle_bin_query(&self, site: &SiteRef, next: Option<&str>, query: &str) -> RemoteResult<(Vec<Binned>, Option<String>)> {
+        let url = match next {
+            Some(link) => self.trusted_link(link)?,
+            None => {
+                let mut u = self.preview_url(&["sites", &site.key, "recycleBin", "items"]);
+                u.set_query(Some(query));
+                u
+            }
+        };
+        let v = self.get_json(url).await?;
+        let mut out = Vec::new();
+        for it in v["value"].as_array().into_iter().flatten() {
+            let Some(id) = it["id"].as_str() else { continue };
+            out.push(Binned {
+                id: id.to_string(),
+                name: it["name"].as_str().unwrap_or_default().to_string(),
+                from: it["deletedFromLocation"].as_str().unwrap_or_default().trim_matches('/').to_string(),
+                size: it["size"].as_u64().unwrap_or(0),
+                deleted_at: it["deletedDateTime"].as_str().unwrap_or_default().to_string(),
+                deleted_by: it["deletedBy"]["user"]["displayName"].as_str().unwrap_or_default().to_string(),
+            });
+        }
+        Ok((out, v["@odata.nextLink"].as_str().map(String::from)))
+    }
+
+    /// What is in a site's recycle bin, newest deletions first. At most `limit` items.
+    pub async fn recycle_bin(&self, site: &SiteRef, limit: usize) -> RemoteResult<Vec<Binned>> {
+        let mut out: Vec<Binned> = Vec::new();
+        let mut next: Option<String> = None;
+        loop {
+            let (mut page, more) = self.recycle_bin_page(site, next.as_deref()).await?;
+            out.append(&mut page);
+            match more {
+                Some(link) if out.len() < limit => next = Some(link),
+                _ => break,
+            }
+        }
+        out.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at));
+        out.truncate(limit);
+        Ok(out)
+    }
+
+    /// Put items from the recycle bin back where they were deleted from.
+    pub async fn restore_binned(&self, site: &SiteRef, ids: &[String]) -> RemoteResult<()> {
+        let u = self.preview_url(&["sites", &site.key, "recycleBin", "items", "restore"]);
+        let body = json!({ "ids": ids });
+        self.send(true, |c| c.post(u.clone()).json(&body)).await.map(|_| ())
+    }
+
+    /// The signed-in user's identifier, as the server uses it for "who".
+    pub async fn me_id(&self) -> RemoteResult<String> {
+        let mut u = self.url(&["me"]);
+        u.set_query(Some("$select=id"));
+        let v = self.get_json(u).await?;
+        Ok(v["id"].as_str().unwrap_or_default().to_string())
+    }
+
+    /// Every file in the library that is checked out, and who holds it.
+    pub async fn checked_out(&self, drive_id: &str) -> RemoteResult<Vec<CheckedOut>> {
+        let mut url = self.url(&["drives", drive_id, "list", "items"]);
+        url.set_query(Some(
+            "$expand=fields($select=CheckoutUserLookupId),driveItem($select=id,publication)             &$filter=fields/CheckoutUserLookupId ne null&$top=200",
+        ));
+        let mut out = Vec::new();
+        loop {
+            // The check-out column is not indexed; the server wants to hear that this
+            // is understood before it will filter on it.
+            let resp = self
+                .send(true, |c| c.get(url.clone()).header("Prefer", "HonorNonIndexedQueriesWarningMayFailRandomly"))
+                .await?;
+            let v: Value = resp.json().await.map_err(RemoteError::other)?;
+            for it in v["value"].as_array().into_iter().flatten() {
+                let Some(id) = it["driveItem"]["id"].as_str() else { continue };
+                let who = &it["driveItem"]["publication"]["checkedOutBy"]["user"];
+                out.push(CheckedOut {
+                    item_id: id.to_string(),
+                    by_id: who["id"].as_str().unwrap_or_default().to_string(),
+                    by_name: who["displayName"].as_str().unwrap_or_default().to_string(),
+                });
+            }
+            match v["@odata.nextLink"].as_str() {
+                Some(next) => url = self.trusted_link(next)?,
+                None => return Ok(out),
+            }
+        }
+    }
 
     pub async fn check_out(&self, drive_id: &str, item_id: &str) -> RemoteResult<()> {
         let u = self.url(&["drives", drive_id, "items", item_id, "checkout"]);

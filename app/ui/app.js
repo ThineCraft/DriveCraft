@@ -72,6 +72,30 @@ const CHIPS = [
   ["failed", "failed", "bad"],
 ];
 
+// How each kind of problem is headed, and what the user can do about it.
+const PROBLEM_KINDS = {
+  stopped: ["The last run stopped", "DriveCraft could not finish. Fix the cause below, then try again."],
+  failed: ["Could not be transferred", "These are tried again on every run. If one keeps failing, the reason beside it says why."],
+  conflict: ["Changed in both places", "Nothing was overwritten. Decide which version you want, then synchronize again."],
+  copy_kept: ["Your version was kept as a copy", "The library's version is in the original place and yours is beside it. Keep what you need and delete the other. This clears when the copy is gone."],
+  not_uploaded: ["Not uploaded", "The library cannot take these as they are. Rename or move them and they go up on the next run."],
+  held: ["Deletions waiting for you", "Put the files back, or synchronize and use \u201cDelete them from the library\u201d."],
+  kept: ["Deleted in the library, kept here", "Someone deleted these in the library, but your copy holds changes. Delete it here, or move it somewhere else to keep it."],
+  long_path: ["Long paths", "These synchronize normally. Some programs cannot open a path this long; shorten a folder name if that gets in your way."],
+};
+
+function tally(c) {
+  return c.problems || { bad: 0, warn: 0, notice: 0 };
+}
+
+function problemsSummary(t) {
+  const need = t.bad + t.warn;
+  const bits = [];
+  if (need) bits.push(`${need.toLocaleString()} ${need === 1 ? "problem needs" : "problems need"} your attention`);
+  if (t.notice) bits.push(`${t.notice.toLocaleString()} ${t.notice === 1 ? "notice" : "notices"}`);
+  return bits.join(" \u00b7 ");
+}
+
 function humanBytes(n) {
   const units = ["bytes", "KB", "MB", "GB", "TB"];
   let v = n, u = 0;
@@ -170,6 +194,7 @@ function render() {
   $("topbar-right").hidden = !main;
   $("statusbar-signin").hidden = !main;
   $("auto-wrap").hidden = !main;
+  $("autostart-wrap").hidden = !main || !state.is_windows;
   $("net-wrap").hidden = !main;
   if (needSetup) {
     $("setup-cancel").hidden = !state.setup;
@@ -185,6 +210,7 @@ function render() {
     selected = state.connections.length ? state.connections[0].name : null;
   }
   $("auto-sync").checked = state.auto_sync;
+  $("autostart").checked = state.autostart;
   $("version").textContent = `DriveCraft ${state.version}`;
   $("computer-os").textContent = state.is_windows ? "Windows" : navigator.platform || "";
   $("lib-count").textContent = String(state.connections.length);
@@ -249,9 +275,9 @@ function isBusy(c) {
 function dotClass(c) {
   if (isBusy(c)) return "busy";
   if (!c.folder_exists && c.local_items > 0) return "bad";
-  const r = results[c.name];
-  if (r && (r.error || (r.report && r.report.failed > 0))) return "bad";
-  if (r && r.report && (r.report.conflicts > 0 || r.report.held_deletes > 0)) return "warn";
+  const t = tally(c);
+  if (t.bad > 0) return "bad";
+  if (t.warn > 0) return "warn";
   if (c.last_sync) return "ok";
   return "";
 }
@@ -294,6 +320,15 @@ function renderDetail() {
   $("conn-library").title = `Open ${decoded(c.library_url)} in your browser`;
   for (const id of ["arrow-right", "arrow-left", "arrow-both"]) $(id).toggleAttribute("hidden", id !== mode.arrow);
   $("conn-missing").hidden = c.folder_exists || c.local_items === 0;
+  const t = tally(c);
+  $("problems-bar").hidden = t.bad + t.warn + t.notice === 0;
+  $("problems-bar").className = `problems-bar ${t.bad ? "bad" : t.warn ? "warn" : "notice"}`;
+  $("problems-text").textContent = problemsSummary(t);
+  const co = c.checked_out || { total: 0, mine: 0 };
+  $("checkouts-bar").hidden = co.total === 0;
+  $("checkouts-text").textContent =
+    `${co.total.toLocaleString()} ${co.total === 1 ? "file is" : "files are"} checked out` +
+    (co.mine ? ` \u00b7 ${co.mine === co.total ? (co.total === 1 ? "by you" : "all by you") : `${co.mine.toLocaleString()} by you`}` : "");
 
   const fixed = c.mode === "ingest";
   $("mode-seg").hidden = fixed;
@@ -303,6 +338,11 @@ function renderDetail() {
     b.disabled = busy;
   }
   $("mode-help").textContent = mode.help;
+  $("explorer-box").hidden = fixed || !state.is_windows;
+  $("explorer-on").checked = !!c.explorer;
+  $("explorer-on").disabled = busy || explorerBusy;
+  $("explorer-more").hidden = !c.explorer;
+  if (document.activeElement !== $("explorer-name")) $("explorer-name").value = c.explorer ? c.explorer.name : c.name;
   $("update-wrap").hidden = !fixed;
 
   const scanned = c.first_scan !== "not started";
@@ -527,6 +567,11 @@ $("menu-signout").addEventListener("click", async () => {
   await refresh();
 });
 
+$("autostart").addEventListener("change", async (ev) => {
+  try { await invoke("set_autostart", { enabled: ev.target.checked }); } catch (e) { toast(e); }
+  await refresh();
+});
+
 $("auto-sync").addEventListener("change", async (ev) => {
   try { await invoke("set_auto_sync", { enabled: ev.target.checked }); } catch (e) { toast(e); }
   await refresh();
@@ -599,6 +644,419 @@ $("held-confirm").addEventListener("click", async () => {
     "Delete from the library"
   );
   if (ok) runSync(c.name, { confirmDeletes: true });
+});
+
+// File Explorer: list the folder there, under a name and icon for this computer.
+let explorerBusy = false;
+async function setExplorer(enabled, icon) {
+  const c = current();
+  if (!c || explorerBusy) return;
+  const label = $("explorer-name").value;
+  explorerBusy = true;
+  renderDetail();
+  $("explorer-name").value = label;
+  if (!c.explorer || !enabled) toast(enabled ? "Adding the folder to File Explorer\u2026" : "Taking the folder out of File Explorer\u2026", true);
+  try {
+    const m = await invoke("set_explorer", { name: c.name, enabled, label, icon: icon || null });
+    if (!enabled) toast("The folder is an ordinary folder again.", true);
+    else if (!c.explorer) toast(`Shown in File Explorer. ${m.done.toLocaleString()} items have their status icon.`, true);
+    else toast("File Explorer updated.", true);
+  } catch (e) {
+    toast(e);
+  }
+  explorerBusy = false;
+  await refresh();
+}
+$("explorer-on").addEventListener("change", (ev) => setExplorer(ev.target.checked));
+$("explorer-apply").addEventListener("click", () => setExplorer(true));
+$("explorer-icon").addEventListener("click", async () => {
+  try {
+    const picked = await invoke("pick_icon");
+    if (picked) await setExplorer(true, picked);
+  } catch (e) { toast(e); }
+});
+
+// The recycle bin of the selected library's site. The whole list is fetched once,
+// newest deletions first, and kept for the session, so finding something is a matter
+// of typing: every search and filter runs here, on what has already arrived.
+const binCache = {};
+let binFor = null;
+let binShown = 100;
+const binPicked = new Set();
+const BIN_KINDS = {
+  doc: ["doc", "docx", "docm", "dot", "dotx", "odt", "rtf", "txt", "md", "one", "msg", "eml"],
+  sheet: ["xls", "xlsx", "xlsm", "xlsb", "csv", "ods"],
+  slides: ["ppt", "pptx", "pptm", "pps", "ppsx", "odp"],
+  pdf: ["pdf"],
+  image: ["png", "jpg", "jpeg", "gif", "bmp", "tif", "tiff", "svg", "webp", "heic", "psd", "ai"],
+  media: ["mp4", "mov", "avi", "mkv", "wmv", "mp3", "wav", "m4a", "flac", "aac"],
+  zip: ["zip", "7z", "rar", "gz", "tar", "iso"],
+};
+function binKind(name) {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0 || dot === name.length - 1 || name.length - dot > 8) return "none";
+  const ext = name.slice(dot + 1).toLowerCase();
+  for (const [kind, list] of Object.entries(BIN_KINDS)) if (list.includes(ext)) return kind;
+  return "other";
+}
+function binError(e) {
+  $("bin-error").textContent = e ? String(e) : "";
+  $("bin-error").hidden = !e;
+}
+// Get an item ready for searching, once.
+function binPrepare(b, lib) {
+  b.inLib = b.from === lib || b.from.startsWith(lib + "/");
+  b.where = b.from === lib ? "Top of the library" : b.inLib ? b.from.slice(lib.length + 1) : b.from || "Elsewhere in the site";
+  b.hay = `${b.name} ${b.where} ${b.deleted_by}`.toLowerCase();
+  b.at = b.deleted_at ? Date.parse(b.deleted_at) : 0;
+  b.kind = binKind(b.name);
+  return b;
+}
+// Fetch the list page by page. What has arrived is searchable straight away.
+async function binLoad(name) {
+  const old = binCache[name];
+  if (old && old.loading) return;
+  const fresh = { items: [], loading: true, library_path: old ? old.library_path : null, at: Date.now() };
+  if (old) old.loading = true; else binCache[name] = fresh;
+  if (binFor === name) renderBin();
+  try {
+    let next = null;
+    do {
+      const page = await invoke("bin_page", { name, libraryPath: fresh.library_path, next });
+      fresh.library_path = page.library_path;
+      for (const b of page.items) fresh.items.push(binPrepare(b, page.library_path));
+      next = page.next;
+      // The first time, show each page as it comes; a refresh swaps in when complete.
+      if (!old && binFor === name) renderBin();
+    } while (next);
+    fresh.loading = false;
+    binCache[name] = fresh;
+    if (binFor === name) binError(null);
+  } catch (e) {
+    fresh.loading = false;
+    if (old) old.loading = false;
+    if (binFor === name) binError(e);
+  }
+  if (binFor === name) renderBin();
+}
+function binFilters() {
+  return {
+    words: $("bin-filter").value.toLowerCase().split(/\s+/).filter(Boolean),
+    when: Number($("bin-when").value || 0),
+    who: $("bin-who").value,
+    kind: $("bin-kind").value,
+    site: $("bin-scope").value === "site",
+    sort: $("bin-sort").value,
+  };
+}
+function binMatches(data, f) {
+  const startOfToday = new Date().setHours(0, 0, 0, 0);
+  const since = f.when > 0 ? startOfToday - (f.when - 1) * 86400000 : 0;
+  const before = f.when < 0 ? Date.now() + f.when * 86400000 : 0;
+  const out = data.items.filter((b) =>
+    (f.site || b.inLib) &&
+    (!since || b.at >= since) &&
+    (!before || b.at < before) &&
+    (!f.who || b.deleted_by === f.who) &&
+    (!f.kind || b.kind === f.kind) &&
+    f.words.every((w) => b.hay.includes(w)));
+  if (f.sort === "old") out.sort((a, b) => a.at - b.at);
+  else if (f.sort === "name") out.sort((a, b) => a.name.localeCompare(b.name));
+  else if (f.sort === "big") out.sort((a, b) => b.size - a.size);
+  else out.sort((a, b) => b.at - a.at);
+  return out;
+}
+// The text with the searched words marked.
+function binMarked(text, words) {
+  const node = document.createDocumentFragment();
+  const lower = text.toLowerCase();
+  const hits = [];
+  for (const w of words) {
+    for (let i = lower.indexOf(w); i !== -1; i = lower.indexOf(w, i + w.length)) hits.push([i, i + w.length]);
+  }
+  hits.sort((a, b) => a[0] - b[0]);
+  let at = 0;
+  for (const [from, to] of hits) {
+    if (from < at) continue;
+    node.append(text.slice(at, from), el("mark", { text: text.slice(from, to) }));
+    at = to;
+  }
+  node.append(text.slice(at));
+  return node;
+}
+function binWhen(at) {
+  if (!at) return "";
+  const d = new Date(at);
+  const days = Math.floor((new Date().setHours(0, 0, 0, 0) - new Date(at).setHours(0, 0, 0, 0)) / 86400000);
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (days === 0) return `Today ${time}`;
+  if (days === 1) return `Yesterday ${time}`;
+  return d.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+}
+function renderBin() {
+  const data = binCache[binFor];
+  const box = $("bin-list");
+  if (!data) { box.replaceChildren(); return; }
+  const f = binFilters();
+
+  // Who deleted things, most frequent first, for the "deleted by" filter.
+  const people = new Map();
+  for (const b of data.items) if (b.deleted_by) people.set(b.deleted_by, (people.get(b.deleted_by) || 0) + 1);
+  const names = [...people.entries()].sort((a, b) => b[1] - a[1]).map((p) => p[0]);
+  const whoBox = $("bin-who");
+  if (whoBox.dataset.names !== names.join("|")) {
+    whoBox.dataset.names = names.join("|");
+    whoBox.replaceChildren(el("option", { value: "", text: "Deleted by anyone" }),
+      ...names.map((n) => el("option", { value: n, text: identity && n === identity.name ? `${n} (you)` : n })));
+    whoBox.value = names.includes(f.who) ? f.who : "";
+    f.who = whoBox.value;
+  }
+  for (const id of ["bin-when", "bin-who", "bin-kind"]) $(id).classList.toggle("on", !!$(id).value);
+  $("bin-scope").classList.toggle("on", f.site);
+  $("bin-clear").hidden = !(f.words.length || f.when || f.who || f.kind);
+
+  const found = binMatches(data, f);
+  const total = data.items.filter((b) => f.site || b.inLib).length;
+  const shown = found.slice(0, binShown);
+  const place = f.site ? "the site’s recycle bin" : "the recycle bin from this library";
+  let status;
+  if (total === 0) status = data.loading ? "Asking the server…" : `Nothing is in ${place}.`;
+  else if (found.length === total) status = `${total.toLocaleString()} ${total === 1 ? "item" : "items"} in ${place}`;
+  else status = `${found.length.toLocaleString()} of ${total.toLocaleString()} match`;
+  if (data.loading && total > 0) status += " · still loading older deletions…";
+  $("bin-status").textContent = status;
+
+  for (const id of [...binPicked]) if (!data.items.some((b) => b.id === id)) binPicked.delete(id);
+  box.replaceChildren(...shown.map((b) => {
+    const tick = el("input", { type: "checkbox", "aria-label": `Select ${b.name}` });
+    tick.checked = binPicked.has(b.id);
+    tick.addEventListener("change", () => {
+      if (tick.checked) binPicked.add(b.id); else binPicked.delete(b.id);
+      renderBinActions();
+    });
+    const name = el("div", { class: "prow-path" });
+    name.append(binMarked(b.name, f.words));
+    const where = el("div", { class: "who" });
+    where.append(binMarked(b.where, f.words));
+    const by = el("div", {});
+    by.append(binMarked(b.deleted_by || "", f.words));
+    return el("label", { class: "brow" }, tick,
+      el("div", { class: "prow-main" }, name, where),
+      el("div", { class: "meta" }, el("div", { text: `${binWhen(b.at)} · ${humanBytes(b.size).join(" ")}` }), by));
+  }));
+  if (found.length > shown.length) {
+    box.append(el("button", { class: "btn quiet bin-more", text: `Show ${Math.min(200, found.length - shown.length).toLocaleString()} more`,
+      onclick: () => { binShown += 200; renderBin(); } }));
+  }
+  if (total > 0 && found.length === 0) {
+    box.append(el("p", { class: "muted", text: f.site ? "Nothing matches. Try fewer words or clear the filters." : "Nothing matches in this library. Try fewer words, or look in the whole site." }));
+  }
+  renderBinActions();
+}
+function renderBinActions() {
+  const n = binPicked.size;
+  $("bin-restore").hidden = n === 0;
+  $("bin-restore").textContent = n === 1 ? "Restore 1 item" : `Restore ${n.toLocaleString()} items`;
+}
+let binTyping = null;
+function binChanged() {
+  binShown = 100;
+  clearTimeout(binTyping);
+  binTyping = setTimeout(renderBin, 60);
+}
+$("bin-filter").addEventListener("input", binChanged);
+for (const id of ["bin-when", "bin-who", "bin-kind", "bin-scope", "bin-sort"]) $(id).addEventListener("change", binChanged);
+$("bin-clear").addEventListener("click", () => {
+  $("bin-filter").value = "";
+  for (const id of ["bin-when", "bin-who", "bin-kind"]) $(id).value = "";
+  binChanged();
+  $("bin-filter").focus();
+});
+$("bin-open").addEventListener("click", () => {
+  closePops();
+  binFor = selected;
+  binShown = 100;
+  binPicked.clear();
+  $("bin-title").textContent = `Recycle bin: ${binFor}`;
+  $("bin-filter").value = "";
+  for (const id of ["bin-when", "bin-who", "bin-kind"]) $(id).value = "";
+  $("bin-scope").value = "lib";
+  $("bin-sort").value = "new";
+  $("bin-sync").hidden = true;
+  binError(null);
+  $("bin-dialog").showModal();
+  $("bin-filter").focus();
+  renderBin();
+  // What was fetched before shows at once; the server is asked again behind it.
+  binLoad(binFor);
+});
+$("bin-reload").addEventListener("click", () => binLoad(binFor));
+$("bin-restore").addEventListener("click", async () => {
+  const name = binFor;
+  const ids = [...binPicked];
+  const button = $("bin-restore");
+  button.disabled = true;
+  button.textContent = "Restoring…";
+  try {
+    await invoke("restore_bin", { name, ids });
+    binError(null);
+    const data = binCache[name];
+    if (data) data.items = data.items.filter((b) => !binPicked.has(b.id));
+    binPicked.clear();
+    $("bin-sync").hidden = false;
+  } catch (e) {
+    binError(e);
+  }
+  button.disabled = false;
+  if (binFor === name) renderBin();
+});
+$("bin-close").addEventListener("click", () => $("bin-dialog").close());
+$("bin-dialog").addEventListener("close", () => { binFor = null; });
+$("bin-sync").addEventListener("click", () => {
+  const name = binFor;
+  $("bin-dialog").close();
+  runSync(name);
+});
+
+// Checked-out files in the selected library
+let checkoutsFor = null;
+function checkoutsError(e) {
+  $("checkouts-error").textContent = e ? String(e) : "";
+  $("checkouts-error").hidden = !e;
+}
+async function loadCheckouts(askServer) {
+  let list;
+  try {
+    list = await invoke("list_checkouts", { name: checkoutsFor, askServer });
+    checkoutsError(null);
+  } catch (e) {
+    checkoutsError(e);
+    if (!askServer) return;
+    try { list = await invoke("list_checkouts", { name: checkoutsFor, askServer: false }); } catch (e2) { return; }
+  }
+  $("checkouts-title").textContent = `Checked out in ${checkoutsFor}`;
+  $("checkouts-none").hidden = list.length > 0;
+  $("checkouts-comment-wrap").hidden = !list.some((f) => f.mine && f.path);
+  const box = $("checkouts-list");
+  box.hidden = list.length === 0;
+  box.replaceChildren(...list.slice(0, 300).map(checkoutRow));
+  if (list.length > 300) box.append(el("p", { class: "muted small", text: `\u2026and ${(list.length - 300).toLocaleString()} more.` }));
+}
+function checkoutRow(f) {
+  const name = checkoutsFor;
+  const actions = el("span", { class: "prow-actions" });
+  if (f.mine && f.path) {
+    actions.append(el("button", { class: "textlink small", text: "Check in", onclick: async (ev) => {
+      ev.target.disabled = true;
+      try {
+        await invoke("check_file", { name, path: f.path, out: false, comment: $("checkouts-comment").value });
+      } catch (e) { checkoutsError(e); }
+      if (checkoutsFor === name) await loadCheckouts(false);
+      refresh();
+    } }));
+  }
+  if (f.path) {
+    actions.append(el("button", { class: "textlink small", text: "Show in folder",
+      onclick: () => invoke("show_problem", { name, path: f.path }).then(() => checkoutsError(null), checkoutsError) }));
+  }
+  const who = f.mine ? "you" : f.by || "someone";
+  return el("div", { class: `prow ${f.mine ? "mine" : ""}` },
+    el("div", { class: "prow-main" },
+      el("div", { class: "prow-path", text: f.path || "A file that is not on this computer" }),
+      el("div", { class: "who", text: `Checked out by ${who} \u00b7 first seen ${new Date(f.since * 1000).toLocaleString()}` })),
+    actions);
+}
+$("checkouts-bar").addEventListener("click", async () => {
+  closePops();
+  checkoutsFor = selected;
+  $("checkouts-list").replaceChildren();
+  $("checkouts-comment").value = "";
+  await loadCheckouts(false);
+  $("checkouts-dialog").showModal();
+  loadCheckouts(true);
+});
+$("checkouts-refresh").addEventListener("click", () => loadCheckouts(true).then(refresh));
+$("checkouts-close").addEventListener("click", () => $("checkouts-dialog").close());
+$("checkouts-dialog").addEventListener("close", () => { checkoutsFor = null; });
+
+// Problems in the selected library
+let problemsFor = null;
+function problemsError(e) {
+  $("problems-error").textContent = e ? String(e) : "";
+  $("problems-error").hidden = !e;
+}
+async function loadProblems() {
+  let list;
+  try {
+    list = await invoke("list_problems", { name: problemsFor });
+    problemsError(null);
+  } catch (e) {
+    problemsError(e);
+    return;
+  }
+  $("problems-title").textContent = `Problems in ${problemsFor}`;
+  $("problems-none").hidden = list.length > 0;
+  $("problems-dismiss-all").hidden = !list.some((p) => p.lasting);
+  $("problems-retry").hidden = !list.some((p) => !p.lasting);
+  const groups = new Map();
+  for (const p of list) {
+    if (!groups.has(p.kind)) groups.set(p.kind, []);
+    groups.get(p.kind).push(p);
+  }
+  const box = $("problems-list");
+  box.hidden = list.length === 0;
+  box.replaceChildren();
+  for (const [kind, items] of groups) {
+    const [title, help] = PROBLEM_KINDS[kind] || [kind, ""];
+    const level = items[0].level === "notice" ? "" : items[0].level;
+    const sec = el("section", { class: "pgroup" },
+      el("h3", {}, el("span", { class: `dot ${level}`, "aria-hidden": "true" }), el("span", { text: title }),
+        el("span", { class: "count", text: items.length.toLocaleString() })),
+      el("p", { class: "muted small", text: help }));
+    for (const p of items.slice(0, 200)) sec.append(problemRow(p));
+    if (items.length > 200) sec.append(el("p", { class: "muted small", text: `\u2026and ${(items.length - 200).toLocaleString()} more of this kind.` }));
+    box.append(sec);
+  }
+}
+function problemRow(p) {
+  const actions = el("span", { class: "prow-actions" });
+  if (p.path) {
+    actions.append(el("button", { class: "textlink small", text: "Show in folder",
+      onclick: () => invoke("show_problem", { name: problemsFor, path: p.path }).then(() => problemsError(null), problemsError) }));
+  }
+  if (p.lasting) {
+    actions.append(el("button", { class: "textlink small", text: "Dismiss", onclick: () => dismissProblems(p.kind, p.path) }));
+  }
+  const main = el("div", { class: "prow-main" });
+  if (p.path) main.append(el("div", { class: "prow-path", text: p.path }));
+  main.append(el("div", { class: "prow-msg", text: p.message }),
+    el("div", { class: "muted small", text: `Since ${new Date(p.first_seen * 1000).toLocaleString()}` }));
+  return el("div", { class: "prow" }, main, actions);
+}
+async function dismissProblems(kind, path) {
+  try {
+    await invoke("dismiss_problems", { name: problemsFor, kind: kind || null, path: path || null });
+  } catch (e) {
+    problemsError(e);
+    return;
+  }
+  await loadProblems();
+  refresh();
+}
+$("problems-bar").addEventListener("click", async () => {
+  closePops();
+  problemsFor = selected;
+  $("problems-list").replaceChildren();
+  await loadProblems();
+  $("problems-dialog").showModal();
+});
+$("problems-close").addEventListener("click", () => $("problems-dialog").close());
+$("problems-dialog").addEventListener("close", () => { problemsFor = null; });
+$("problems-dismiss-all").addEventListener("click", () => dismissProblems());
+$("problems-retry").addEventListener("click", () => {
+  const name = problemsFor;
+  $("problems-dialog").close();
+  runSync(name);
 });
 
 // Connect a library
@@ -686,10 +1144,17 @@ listen("sync-started", (ev) => {
   }
 });
 listen("sync-log", (ev) => pushLog(ev.payload.name, ev.payload.line));
+listen("notice", (ev) => {
+  // Inside an open dialog a toast would be hidden behind it.
+  if (checkoutsFor) { if (!ev.payload.good) checkoutsError(ev.payload.text); }
+  else toast(ev.payload.text, ev.payload.good);
+  refresh();
+});
 listen("sync-finished", (ev) => {
   const f = ev.payload;
   results[f.name] = f;
   if (f.error) pushLog(f.name, `stopped: ${f.error}`, "bad");
+  if (problemsFor === f.name) loadProblems();
   refresh();
 });
 

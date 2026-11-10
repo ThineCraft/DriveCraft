@@ -20,6 +20,7 @@
     is_windows: true,
     long_paths: false,
     auto_sync: false,
+    autostart: false,
     link: { chosen: true, address: "192.168.1.9", name: "Ethernet 3" },
     links: [{ name: "Ethernet 2", address: "192.168.1.10" }, { name: "Ethernet 3", address: "192.168.1.9" }, { name: "Tailscale", address: "100.107.75.91" }],
     connections: view === "empty" ? [] : [
@@ -29,6 +30,25 @@
       { name: "File server migration", mode: "ingest", folder: "\\\\fileserver\\projects", folder_exists: true, library_url: "https://contoso.sharepoint.com/sites/Projects/Documents", remote_files: 0, remote_folders: 0, remote_bytes: 0, local_items: 0, pending: 0, first_scan: "not started", last_sync: null, syncing: false },
     ],
   };
+  const problems = {
+    TTSEC: [
+      { kind: "failed", level: "bad", lasting: false, path: "Finance/FY27/Budget model.xlsx", message: "the file is open in another program", first_seen: now - 5400, last_seen: now - 240 },
+      { kind: "copy_kept", level: "warn", lasting: true, path: "Policies/Travel.docx", message: "Different here and in the library. The library's version is in its place; yours was kept as \"Travel (local copy).docx\".", first_seen: now - 86400, last_seen: now - 86400 },
+      { kind: "not_uploaded", level: "warn", lasting: false, path: "Contracts/Supplier: draft?.pdf", message: "Not uploaded: the name contains a character the server does not allow.", first_seen: now - 7200, last_seen: now - 240 },
+      { kind: "long_path", level: "notice", lasting: true, path: "Projects/2026/Port Authority/Environmental impact assessment/Appendices/Appendix C - Marine survey raw data/Station 14/readings-final-v3.csv", message: "Its full path on this computer is longer than 260 characters. It is synchronized, but some programs will not open it.", first_seen: now - 172800, last_seen: now - 172800 },
+    ],
+  };
+  const checkouts = {
+    TTSEC: [
+      { item_id: "1", path: "Finance/FY27/Budget model.xlsx", by: "Shawn Lewis", mine: true, since: now - 3600 },
+      { item_id: "2", path: "Policies/Travel.docx", by: "Anita Ali", mine: false, since: now - 90000 },
+    ],
+  };
+  const tallyOf = (name) => {
+    const t = { bad: 0, warn: 0, notice: 0 };
+    for (const p of problems[name] || []) t[p.level]++;
+    return t;
+  };
   const who = { name: "Shawn Lewis", account: "shawn@contoso.com", can_write: true };
 
   function report(extra) {
@@ -36,7 +56,44 @@
   }
 
   const handlers = {
-    async get_state() { return JSON.parse(JSON.stringify(data)); },
+    async get_state() {
+      const s = JSON.parse(JSON.stringify(data));
+      for (const c of s.connections) {
+        c.problems = tallyOf(c.name);
+        const co = checkouts[c.name] || [];
+        c.checked_out = { total: co.length, mine: co.filter((f) => f.mine).length };
+      }
+      return s;
+    },
+    async list_problems({ name }) { return JSON.parse(JSON.stringify(problems[name] || [])); },
+    async dismiss_problems({ name, kind, path }) {
+      problems[name] = (problems[name] || []).filter((p) => !p.lasting || (kind && !(p.kind === kind && p.path === path)));
+    },
+    async show_problem() {},
+    async bin_page({ next }) {
+      await wait(400);
+      const lib = "sites/TTSEC/Shared Documents";
+      const people = ["Shawn Lewis", "Anita Ali", "Kwasi Lake", "Gillian Lynch"];
+      const names = ["Q3 forecast.xlsx", "Board minutes.docx", "Supplier agreement.pdf", "Site photo.jpg", "Old contracts", "Budget model.xlsx", "Travel policy.docx", "Launch deck.pptx", "Archive.zip", "Notes.txt"];
+      const folders = ["", "/Finance/FY27", "/Policies", "/Contracts/2026", "/Board"];
+      const start = Number(next || 0);
+      const items = [];
+      for (let i = start; i < Math.min(start + 400, 1200); i++) {
+        items.push({ id: `b${i}`, name: i < 10 ? names[i] : `${names[i % 10].replace(/(\.\w+)?$/, ` ${i}$1`)}`, from: i % 17 === 3 ? "sites/TTSEC/Site Assets" : lib + folders[i % 5],
+          size: 2000 + ((i * 7919) % 9000000), deleted_at: new Date(Date.now() - i * 5400e3).toISOString(), deleted_by: people[(i * 3) % 4] });
+      }
+      return { library_path: lib, items, next: start + 400 < 1200 ? String(start + 400) : null };
+    },
+    async restore_bin() { await wait(500); },
+    async list_checkouts({ name }) { return JSON.parse(JSON.stringify(checkouts[name] || [])); },
+    async check_file({ name, path }) { await wait(400); checkouts[name] = (checkouts[name] || []).filter((f) => f.path !== path); },
+    async set_explorer({ name, enabled, label }) {
+      await wait(600);
+      const c = data.connections.find((x) => x.name === name);
+      c.explorer = enabled ? { folder: c.folder, name: label || name, icon: "" } : null;
+      return { done: enabled ? c.local_items : 0, failed: 0 };
+    },
+    async pick_icon() { return "C:\\Icons\\team.ico"; },
     async whoami() { return data.signed_in ? Object.assign({}, who, { can_write: data.can_write }) : null; },
     async save_setup({ clientId, tenant }) { data.setup = { client_id: clientId, tenant: tenant || "organizations" }; data.signed_in = false; },
     async login({ readOnly }) { await wait(900); data.signed_in = true; data.can_write = !readOnly; return Object.assign({}, who, { can_write: data.can_write }); },
@@ -63,6 +120,7 @@
       data.link = l ? { chosen: true, address: l.address, name: l.name } : { chosen: false, address: "192.168.1.10", name: "Ethernet 2" };
     },
     async set_auto_sync({ enabled }) { data.auto_sync = enabled; },
+    async set_autostart({ enabled }) { data.autostart = enabled; },
     async sync_everything() {},
     async sync({ name, dryRun, confirmDeletes }) {
       const c = data.connections.find((x) => x.name === name);

@@ -11,6 +11,7 @@
 //! simply not reached in those modes.
 
 use crate::catalog::{Catalog, Connection, LocalRow, Mode};
+use crate::problems::{self, Kind, Problem};
 use crate::paths::{self, child_rel, depth, file_name_rel, join_rel, parent_rel};
 use crate::quickxor::hash_file;
 use crate::remote::{Downloaded, ItemKind, Remote, RemoteError, RemoteItem, UploadTarget};
@@ -77,6 +78,8 @@ pub struct Report {
     /// Seconds spent sending local changes, or ingesting.
     pub push_secs: f64,
     pub warnings: Vec<String>,
+    /// What needs the user's attention, item by item. Also kept in the catalog.
+    pub problems: Vec<Problem>,
 }
 
 impl Report {
@@ -211,6 +214,8 @@ pub struct Engine<'a, R: Remote> {
     log: Box<dyn Fn(&str) + 'a>,
     root: PathBuf,
     server_prefix_len: usize,
+    /// The folder is listed in File Explorer, which shows a status beside each item.
+    in_explorer: bool,
 }
 
 impl<'a, R: Remote> Engine<'a, R> {
@@ -226,6 +231,7 @@ impl<'a, R: Remote> Engine<'a, R> {
             opts,
             report: Report::default(),
             log: Box::new(|_| {}),
+            in_explorer: crate::explorer::shown_as(&root).is_some(),
             root,
             server_prefix_len,
         }
@@ -258,6 +264,43 @@ impl<'a, R: Remote> Engine<'a, R> {
         self.report.warnings.push(format!("failed: {w}"));
     }
 
+    /// Record what an item looked like when it was synchronized, and tell File
+    /// Explorer it is in step with the library.
+    fn record(&self, row: &LocalRow) -> Result<()> {
+        self.cat.local_upsert(self.id(), row)?;
+        if self.in_explorer {
+            // The status icon is a courtesy; failing to set one stops nothing.
+            let _ = crate::explorer::mark_in_sync(&self.abs(&row.rel_path));
+        }
+        Ok(())
+    }
+
+    /// Record something that needs the user's attention.
+    fn problem(&mut self, kind: Kind, path: &str, watch: Option<String>, message: impl Into<String>) {
+        if self.report.problems.len() == problems::MAX_LISTED {
+            (self.log)(&format!(
+                "more than {} problems; the rest are in this log but not in the problems list",
+                problems::MAX_LISTED
+            ));
+        }
+        if self.report.problems.len() >= problems::MAX_LISTED {
+            return;
+        }
+        self.report.problems.push(Problem {
+            kind,
+            path: path.to_string(),
+            message: message.into(),
+            watch,
+        });
+    }
+
+    /// An item could not be transferred or changed.
+    fn fail_at(&mut self, path: &str, why: impl std::fmt::Display) {
+        let why = why.to_string();
+        self.fail(format!("{path}: {why}"));
+        self.problem(Kind::Failed, path, None, why);
+    }
+
     fn abs(&self, rel: &str) -> PathBuf {
         join_rel(&self.root, rel)
     }
@@ -267,6 +310,26 @@ impl<'a, R: Remote> Engine<'a, R> {
     }
 
     pub async fn run(mut self) -> Result<Report> {
+        let outcome = self.work().await;
+        if outcome.is_ok() && self.in_explorer && !self.opts.dry_run && self.report.changes() > 0 {
+            // A change inside a folder makes Windows show the folder as pending.
+            let _ = crate::explorer::mark_folders(self.cat, &self.conn);
+        }
+        if !self.opts.dry_run {
+            let now = problems::unix_now();
+            // Keeping the list of problems must never be what stops a run.
+            let kept = match &outcome {
+                Ok(()) => self.cat.record_run(&self.conn, &self.report.problems, now),
+                Err(e) => self.cat.record_stopped(self.id(), &format!("{e:#}"), now),
+            };
+            if let Err(e) = kept {
+                (self.log)(&format!("warning: the problems list could not be updated: {e:#}"));
+            }
+        }
+        outcome.map(|()| self.report)
+    }
+
+    async fn work(&mut self) -> Result<()> {
         match self.conn.mode {
             Mode::Ingest => {
                 if !self.root.is_dir() {
@@ -328,7 +391,7 @@ impl<'a, R: Remote> Engine<'a, R> {
                 .unwrap_or(0);
             self.cat.set_last_sync(self.id(), now)?;
         }
-        Ok(self.report)
+        Ok(())
     }
 
     // ---- step 1: the server's change feed ------------------------------------
@@ -460,7 +523,7 @@ impl<'a, R: Remote> Engine<'a, R> {
                 }
             };
             if let Err(e) = r {
-                self.fail(format!("{path}: {e:#}"));
+                self.fail_at(&path, format!("{e:#}"));
             }
         }
         self.run_downloads(downloads).await?;
@@ -468,7 +531,7 @@ impl<'a, R: Remote> Engine<'a, R> {
         dead.sort_by_key(|(l, _)| std::cmp::Reverse(l.as_ref().map(|l| depth(&l.rel_path)).unwrap_or(0)));
         for (l, it) in dead {
             if let Err(e) = self.apply_deleted(l, &it) {
-                self.fail(format!("{}: {e:#}", it.name));
+                self.fail_at(&it.name, format!("{e:#}"));
             }
         }
         Ok(())
@@ -494,7 +557,7 @@ impl<'a, R: Remote> Engine<'a, R> {
             }
             let mut moved = occ;
             moved.rel_path = parked;
-            self.cat.local_upsert(self.id(), &moved)?;
+            self.record(&moved)?;
         } else {
             self.cat.local_delete(self.id(), &occ.id)?;
         }
@@ -506,9 +569,15 @@ impl<'a, R: Remote> Engine<'a, R> {
         let aside = paths::local_copy_path(abs);
         std::fs::rename(abs, &aside).with_context(|| format!("keeping a copy of {rel}"))?;
         self.report.conflicts += 1;
+        let aside_name = aside.file_name().unwrap_or_default().to_string_lossy().to_string();
+        self.problem(
+            Kind::CopyKept,
+            rel,
+            Some(child_rel(parent_rel(rel), &aside_name)),
+            format!("Different here and in the library. The library's version is in its place; yours was kept as \"{aside_name}\"."),
+        );
         self.warn(format!(
-            "{rel} differs from the server's copy; your version was kept as {}",
-            aside.file_name().unwrap_or_default().to_string_lossy()
+            "{rel} differs from the server's copy; your version was kept as {aside_name}"
         ));
         Ok(())
     }
@@ -561,7 +630,7 @@ impl<'a, R: Remote> Engine<'a, R> {
                     std::fs::create_dir_all(&abs)?;
                 }
                 self.cat.local_rename_prefix(self.id(), &l.rel_path, path)?;
-                self.cat.local_upsert(self.id(), &folder_row(path))?;
+                self.record(&folder_row(path))?;
                 self.cat.clear_dirty(self.id(), &it.id)?;
                 self.report.renamed += 1;
             }
@@ -581,7 +650,7 @@ impl<'a, R: Remote> Engine<'a, R> {
                     self.report.folders_created += 1;
                     self.note(format!("create folder {path}"));
                 }
-                self.cat.local_upsert(self.id(), &folder_row(path))?;
+                self.record(&folder_row(path))?;
                 self.cat.clear_dirty(self.id(), &it.id)?;
             }
         }
@@ -596,6 +665,15 @@ impl<'a, R: Remote> Engine<'a, R> {
         }
         if cfg!(windows) && self.abs(path).as_os_str().len() >= paths::WINDOWS_PATH_LIMIT {
             self.report.long_paths += 1;
+            self.problem(
+                Kind::LongPath,
+                path,
+                Some(path.to_string()),
+                format!(
+                    "Its full path on this computer is longer than {} characters. It is synchronized, but some programs will not open it.",
+                    paths::WINDOWS_PATH_LIMIT
+                ),
+            );
             if self.report.long_paths <= 10 {
                 self.warn(format!(
                     "long path: {path} exceeds {} characters on this machine; some programs will not open it",
@@ -636,7 +714,7 @@ impl<'a, R: Remote> Engine<'a, R> {
                 }
                 let mut moved = cur.clone();
                 moved.rel_path = path.to_string();
-                self.cat.local_upsert(self.id(), &moved)?;
+                self.record(&moved)?;
                 local = Some(moved);
             }
         }
@@ -725,9 +803,7 @@ impl<'a, R: Remote> Engine<'a, R> {
 
     /// Record that the file on disk already matches the server's copy.
     fn adopt(&mut self, path: &str, it: &RemoteItem, st: Stat) -> Result<()> {
-        self.cat.local_upsert(
-            self.id(),
-            &LocalRow {
+        self.record(&LocalRow {
                 id: it.id.clone(),
                 rel_path: path.to_string(),
                 kind: ItemKind::File,
@@ -777,9 +853,7 @@ impl<'a, R: Remote> Engine<'a, R> {
                     })();
                     match finish {
                         Ok(st) => {
-                            self.cat.local_upsert(
-                                self.id(),
-                                &LocalRow {
+                            self.record(&LocalRow {
                                     id: d.item.id.clone(),
                                     rel_path: d.rel.clone(),
                                     kind: ItemKind::File,
@@ -801,13 +875,13 @@ impl<'a, R: Remote> Engine<'a, R> {
                         }
                         Err(e) => {
                             let _ = std::fs::remove_file(&tmp);
-                            self.fail(format!("{}: {e:#}", d.rel));
+                            self.fail_at(&d.rel, format!("{e:#}"));
                         }
                     }
                 }
                 Err(e) => {
                     let _ = std::fs::remove_file(&tmp);
-                    self.fail(format!("{}: {e}", d.rel));
+                    self.fail_at(&d.rel, e);
                 }
             }
         }
@@ -821,6 +895,12 @@ impl<'a, R: Remote> Engine<'a, R> {
             return Ok(());
         }
         if st.size != l.size || st.mtime_ns != l.mtime_ns {
+            self.problem(
+                Kind::Kept,
+                &l.rel_path,
+                Some(l.rel_path.clone()),
+                "Deleted in the library, but changed here since it was last synchronized, so it was kept.",
+            );
             self.warn(format!(
                 "{} was deleted on the server but has been changed here; it was kept",
                 l.rel_path
@@ -860,6 +940,12 @@ impl<'a, R: Remote> Engine<'a, R> {
                     if std::fs::remove_dir(&abs).is_ok() {
                         self.report.deleted_local += 1;
                     } else {
+                        self.problem(
+                            Kind::Kept,
+                            &l.rel_path,
+                            Some(l.rel_path.clone()),
+                            "Deleted in the library, but it still holds files that are only here, so it was kept.",
+                        );
                         self.warn(format!(
                             "{} was deleted on the server but still holds files that are only here; it was kept",
                             l.rel_path
@@ -922,6 +1008,8 @@ impl<'a, R: Remote> Engine<'a, R> {
             let entry = match walk.next() {
                 None => break,
                 Some(Err(e)) => {
+                    let at = e.path().and_then(|p| self.rel_of(p)).unwrap_or_default();
+                    self.problem(Kind::NotUploaded, &at, None, format!("Could not be read: {e}"));
                     self.warn(format!("could not read part of the local folder: {e}"));
                     continue;
                 }
@@ -929,6 +1017,12 @@ impl<'a, R: Remote> Engine<'a, R> {
             };
             any_entries = true;
             let Some(rel) = self.rel_of(entry.path()) else {
+                self.problem(
+                    Kind::NotUploaded,
+                    &entry.path().display().to_string(),
+                    None,
+                    "Skipped: the name is not valid text.",
+                );
                 self.warn(format!("skipped a name that is not valid text: {}", entry.path().display()));
                 if entry.file_type().is_dir() {
                     walk.skip_current_dir();
@@ -950,6 +1044,7 @@ impl<'a, R: Remote> Engine<'a, R> {
             }
             if ft.is_symlink() {
                 self.report.skipped += 1;
+                self.problem(Kind::NotUploaded, &rel, None, "Not uploaded: it is a link to somewhere else. Links are only followed in Ingest mode.");
                 self.warn(format!("{rel} is a symbolic link; links are only followed in Ingest mode"));
                 continue;
             }
@@ -961,6 +1056,7 @@ impl<'a, R: Remote> Engine<'a, R> {
             }
             if let Some(why) = paths::invalid_server_name(&name) {
                 self.report.skipped += 1;
+                self.problem(Kind::NotUploaded, &rel, None, format!("Not uploaded: the name {why}."));
                 self.warn(format!("{rel} was not uploaded: the name {why}"));
                 if ft.is_dir() {
                     walk.skip_current_dir();
@@ -1034,9 +1130,7 @@ impl<'a, R: Remote> Engine<'a, R> {
             {
                 Ok(item) => {
                     self.cat.upsert_remote_clean(&self.conn, &item)?;
-                    self.cat.local_upsert(
-                        self.id(),
-                        &LocalRow {
+                    self.record(&LocalRow {
                             id: item.id.clone(),
                             rel_path: rel.clone(),
                             kind: ItemKind::Folder,
@@ -1048,7 +1142,7 @@ impl<'a, R: Remote> Engine<'a, R> {
                     )?;
                     self.report.remote_folders_created += 1;
                 }
-                Err(e) => self.fail(format!("{rel}: {e}")),
+                Err(e) => self.fail_at(&rel, e),
             }
         }
 
@@ -1080,10 +1174,10 @@ impl<'a, R: Remote> Engine<'a, R> {
                     row.rel_path = new_rel;
                     row.size = st.size;
                     row.mtime_ns = st.mtime_ns;
-                    self.cat.local_upsert(self.id(), &row)?;
+                    self.record(&row)?;
                     self.report.moved_remote += 1;
                 }
-                Err(e) => self.fail(format!("{}: {e}", l.rel_path)),
+                Err(e) => self.fail_at(&l.rel_path, e),
             }
         }
 
@@ -1093,6 +1187,12 @@ impl<'a, R: Remote> Engine<'a, R> {
             if self.server_path_too_long(&rel) {
                 self.report.skipped += 1;
                 self.report.long_paths += 1;
+                self.problem(
+                    Kind::NotUploaded,
+                    &rel,
+                    None,
+                    format!("Not uploaded: its path in the library would be longer than {} characters.", paths::SERVER_PATH_LIMIT),
+                );
                 self.warn(format!(
                     "{rel} was not uploaded: its path on the server would exceed {} characters",
                     paths::SERVER_PATH_LIMIT
@@ -1126,7 +1226,7 @@ impl<'a, R: Remote> Engine<'a, R> {
                         if !self.opts.dry_run {
                             let mut row = l.clone();
                             row.mtime_ns = st.mtime_ns;
-                            self.cat.local_upsert(self.id(), &row)?;
+                            self.record(&row)?;
                         }
                         continue;
                     }
@@ -1172,6 +1272,15 @@ impl<'a, R: Remote> Engine<'a, R> {
             } else {
                 format!("more than {}", self.opts.max_deletes)
             };
+            self.problem(
+                Kind::Held,
+                "",
+                None,
+                format!(
+                    "{} items are missing from this folder ({why}). They were not deleted from the library; that needs your confirmation.",
+                    top.len()
+                ),
+            );
             self.warn(format!(
                 "{} items are missing here ({why}). They were NOT deleted on the server; \
                  that needs your confirmation.",
@@ -1212,7 +1321,7 @@ impl<'a, R: Remote> Engine<'a, R> {
                         l.rel_path
                     ));
                 }
-                Err(e) => self.fail(format!("{}: {e}", l.rel_path)),
+                Err(e) => self.fail_at(&l.rel_path, e),
             }
         }
         Ok(())
@@ -1247,9 +1356,7 @@ impl<'a, R: Remote> Engine<'a, R> {
             match res {
                 Ok(item) => {
                     self.cat.upsert_remote_clean(&self.conn, &item)?;
-                    self.cat.local_upsert(
-                        self.id(),
-                        &LocalRow {
+                    self.record(&LocalRow {
                             id: item.id.clone(),
                             rel_path: u.rel.clone(),
                             kind: ItemKind::File,
@@ -1267,12 +1374,18 @@ impl<'a, R: Remote> Engine<'a, R> {
                 }
                 Err(RemoteError::Conflict(_)) => {
                     self.report.conflicts += 1;
+                    self.problem(
+                        Kind::Conflict,
+                        &u.rel,
+                        None,
+                        "Not uploaded: the library's copy changed as well. Nothing was overwritten.",
+                    );
                     self.warn(format!(
                         "{} was not uploaded: the server's copy changed as well. Nothing was overwritten.",
                         u.rel
                     ));
                 }
-                Err(e) => self.fail(format!("{}: {e}", u.rel)),
+                Err(e) => self.fail_at(&u.rel, e),
             }
         }
         Ok(())
@@ -1300,6 +1413,8 @@ impl<'a, R: Remote> Engine<'a, R> {
                 None => break,
                 Some(Err(e)) => {
                     self.report.skipped += 1;
+                    let at = e.path().and_then(|p| self.rel_of(p)).unwrap_or_default();
+                    self.problem(Kind::NotUploaded, &at, None, format!("Could not be read: {e}"));
                     self.warn(format!("skipped part of the source: {e}"));
                     continue;
                 }
@@ -1308,6 +1423,12 @@ impl<'a, R: Remote> Engine<'a, R> {
             let ft = entry.file_type();
             let Some(rel) = self.rel_of(entry.path()) else {
                 self.report.skipped += 1;
+                self.problem(
+                    Kind::NotUploaded,
+                    &entry.path().display().to_string(),
+                    None,
+                    "Skipped: the name is not valid text.",
+                );
                 self.warn(format!("skipped a name that is not valid text: {}", entry.path().display()));
                 if ft.is_dir() {
                     walk.skip_current_dir();
@@ -1323,6 +1444,7 @@ impl<'a, R: Remote> Engine<'a, R> {
             }
             if let Some(why) = paths::invalid_server_name(&name) {
                 self.report.skipped += 1;
+                self.problem(Kind::NotUploaded, &rel, None, format!("Not uploaded: the name {why}."));
                 self.warn(format!("{rel} was not uploaded: the name {why}"));
                 if ft.is_dir() {
                     walk.skip_current_dir();
@@ -1345,6 +1467,7 @@ impl<'a, R: Remote> Engine<'a, R> {
                         Some(r) if r.kind == ItemKind::Folder => Some(r.id),
                         Some(_) => {
                             self.report.skipped += 1;
+                            self.problem(Kind::NotUploaded, &rel, None, "Not uploaded: the library has a file with this folder's name.");
                             self.warn(format!("{rel} was not uploaded: the server has a file with that name"));
                             walk.skip_current_dir();
                             continue;
@@ -1362,7 +1485,7 @@ impl<'a, R: Remote> Engine<'a, R> {
                                         Some(item.id)
                                     }
                                     Err(e) => {
-                                        self.fail(format!("{rel}: {e}"));
+                                        self.fail_at(&rel, e);
                                         walk.skip_current_dir();
                                         continue;
                                     }
@@ -1381,6 +1504,12 @@ impl<'a, R: Remote> Engine<'a, R> {
             if self.server_path_too_long(&rel) {
                 self.report.skipped += 1;
                 self.report.long_paths += 1;
+                self.problem(
+                    Kind::NotUploaded,
+                    &rel,
+                    None,
+                    format!("Not uploaded: its path in the library would be longer than {} characters.", paths::SERVER_PATH_LIMIT),
+                );
                 self.warn(format!(
                     "{rel} was not uploaded: its path on the server would exceed {} characters",
                     paths::SERVER_PATH_LIMIT
@@ -1406,6 +1535,12 @@ impl<'a, R: Remote> Engine<'a, R> {
                     }
                 } else {
                     self.report.skipped += 1;
+                    self.problem(
+                        Kind::NotUploaded,
+                        &rel,
+                        None,
+                        "Changed in the source after it was ingested. It was not uploaded again; turn on \"Upload new versions of changed files\" to send it.",
+                    );
                     self.warn(format!(
                         "{rel} changed in the source after it was ingested; it was not uploaded again (use --update to send new versions)"
                     ));
@@ -1426,9 +1561,7 @@ impl<'a, R: Remote> Engine<'a, R> {
                     };
                     if same {
                         if !self.opts.dry_run {
-                            self.cat.local_upsert(
-                                self.id(),
-                                &LocalRow {
+                            self.record(&LocalRow {
                                     id: r.id.clone(),
                                     rel_path: rel.clone(),
                                     kind: ItemKind::File,
@@ -1442,6 +1575,12 @@ impl<'a, R: Remote> Engine<'a, R> {
                         self.report.adopted += 1;
                     } else {
                         self.report.conflicts += 1;
+                        self.problem(
+                            Kind::Conflict,
+                            &rel,
+                            None,
+                            "Not uploaded: the library already has a file here with different content.",
+                        );
                         self.warn(format!(
                             "{rel} already exists on the server with different content; it was not uploaded"
                         ));
@@ -1449,6 +1588,7 @@ impl<'a, R: Remote> Engine<'a, R> {
                 }
                 Some(_) => {
                     self.report.skipped += 1;
+                    self.problem(Kind::NotUploaded, &rel, None, "Not uploaded: the library has a folder with this file's name.");
                     self.warn(format!("{rel} was not uploaded: the server has a folder with that name"));
                 }
                 None => {

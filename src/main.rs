@@ -128,6 +128,30 @@ enum Cmd {
     },
     /// Show what the catalog knows about a connection.
     Status { name: Option<String> },
+    /// Show a library's folder in File Explorer, with a status icon beside each item.
+    /// Windows shows the icons while the DriveCraft desktop app is running.
+    Explorer {
+        name: String,
+        /// Take the folder out of File Explorer again.
+        #[arg(long)]
+        off: bool,
+        /// The name to show in File Explorer. Defaults to the connection's name.
+        #[arg(long)]
+        label: Option<String>,
+        /// An icon file (.ico) to show beside it.
+        #[arg(long)]
+        icon: Option<PathBuf>,
+        #[arg(long, hide = true)]
+        hold: Option<u64>,
+    },
+    /// List what needs your attention: files that could not be synchronized, copies
+    /// that were kept, deletions waiting for you.
+    Problems {
+        name: Option<String>,
+        /// Clear the notices that stay until dismissed (kept copies, long paths).
+        #[arg(long)]
+        dismiss_notices: bool,
+    },
     /// Change a connection between archive and sync.
     Mode {
         name: String,
@@ -136,6 +160,8 @@ enum Cmd {
     },
     /// Stop synchronizing a library. Local files are left where they are.
     Disconnect { name: String },
+    /// List the files that are checked out in a library, and by whom.
+    Checkouts { name: Option<String> },
     /// Check a file out so that others cannot change it.
     Checkout { file: PathBuf },
     /// Check a file back in.
@@ -146,6 +172,21 @@ enum Cmd {
     },
     /// Check this machine's setup.
     Doctor,
+    /// Show what was deleted from a library and is still in the site's recycle bin,
+    /// or put items back.
+    RecycleBin {
+        name: String,
+        /// Put the item with this identifier back where it was. May be repeated.
+        #[arg(long)]
+        restore: Vec<String>,
+        /// Show everything in the site's recycle bin, not only this library's.
+        #[arg(long)]
+        whole_site: bool,
+        /// Show only items whose name or folder contains every one of these words.
+        #[arg(long)]
+        find: Option<String>,
+    },
+
 }
 
 fn pick(cat: &Catalog, name: Option<&str>) -> Result<Vec<Connection>> {
@@ -282,6 +323,11 @@ async fn sync_once(
                     }
                 }
                 ok &= report.failed == 0;
+                if !opts.dry_run {
+                    if let Err(e) = drivecraft::checkouts::refresh(cat, graph, &conn).await {
+                        log.line(&format!("could not list checked-out files: {e:#}"));
+                    }
+                }
             }
             Err(e) => {
                 say(&format!("{}: stopped: {e:#}", conn.name));
@@ -496,6 +542,15 @@ async fn run(cli: Cli) -> Result<bool> {
                     human_bytes(n.remote_bytes)
                 );
                 println!("  recorded here: {} items; {} waiting to be reconciled", n.local_items, n.pending);
+                let t = cat.problem_tally(c.id)?;
+                if t.total() > 0 {
+                    println!(
+                        "  problems: {} need attention, {} notices. Run: drivecraft problems {}",
+                        t.bad + t.warn,
+                        t.notice,
+                        c.name
+                    );
+                }
                 println!(
                     "  first scan: {}",
                     if c.delta_link.is_some() {
@@ -506,6 +561,54 @@ async fn run(cli: Cli) -> Result<bool> {
                         "not started"
                     }
                 );
+            }
+        }
+        Cmd::Explorer { name, off, label, icon, hold } => {
+            let cat = home.catalog()?;
+            let c = cat.connection(&name)?.ok_or_else(|| anyhow!("no connection named '{name}'"))?;
+            if off {
+                let m = drivecraft::explorer::turn_off(&c)?;
+                println!("'{}' is no longer shown in File Explorer ({} items put back to ordinary files).", c.name, m.done);
+            } else {
+                let icon = match icon {
+                    Some(p) => std::path::absolute(&p)?.display().to_string(),
+                    None => drivecraft::explorer::default_icon(),
+                };
+                let m = drivecraft::explorer::turn_on(&cat, &c, label.as_deref().unwrap_or(&c.name), &icon)?;
+                println!("'{}' is shown in File Explorer. {} items marked as synchronized, {} could not be marked.", c.name, m.done, m.failed);
+                if let Some(secs) = hold {
+                    let _link = drivecraft::explorer::connect(&c.local_path)?;
+                    println!("connected for {secs}s");
+                    tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                }
+            }
+        }
+        Cmd::Problems { name, dismiss_notices } => {
+            let cat = home.catalog()?;
+            for c in pick(&cat, name.as_deref())? {
+                cat.prune_problems(&c)?;
+                if dismiss_notices {
+                    let n = cat.dismiss_lasting(c.id)?;
+                    println!("{}: dismissed {n} notices", c.name);
+                }
+                let list = cat.problems(c.id)?;
+                if list.is_empty() {
+                    println!("{}: no problems", c.name);
+                    continue;
+                }
+                println!("{} [{}]: {} to look at", c.name, c.mode.as_str(), list.len());
+                let mut heading = None;
+                for p in list {
+                    if heading != Some(p.kind) {
+                        heading = Some(p.kind);
+                        println!("  {}", p.kind.title());
+                    }
+                    if p.path.is_empty() {
+                        println!("    {}", p.message);
+                    } else {
+                        println!("    {}\n      {}", p.path, p.message);
+                    }
+                }
             }
         }
         Cmd::Mode { name, mode } => {
@@ -524,18 +627,75 @@ async fn run(cli: Cli) -> Result<bool> {
         Cmd::Disconnect { name } => {
             let cat = home.catalog()?;
             let c = cat.connection(&name)?.ok_or_else(|| anyhow!("no connection named '{name}'"))?;
+            drivecraft::explorer::turn_off(&c)?;
             cat.remove_connection(c.id)?;
             println!("Disconnected '{}'. The files in {} were left as they are.", c.name, c.local_path.display());
         }
+        Cmd::Checkouts { name } => {
+            let cat = home.catalog()?;
+            let graph = home.graph()?;
+            for c in pick(&cat, name.as_deref())? {
+                if let Err(e) = drivecraft::checkouts::refresh(&cat, &graph, &c).await {
+                    println!("{}: could not ask the server ({e:#}); showing what was last known", c.name);
+                }
+                let list = cat.checkouts(c.id)?;
+                if list.is_empty() {
+                    println!("{}: nothing is checked out", c.name);
+                    continue;
+                }
+                println!("{}: {} checked out", c.name, list.len());
+                for f in list {
+                    let who = if f.mine { "you".to_string() } else if f.by.is_empty() { "someone".to_string() } else { f.by };
+                    println!("  {}  (by {who})", f.path.unwrap_or_else(|| "a file that is not on this computer".into()));
+                }
+            }
+        }
         Cmd::Checkout { file } => {
             let (conn, id, rel) = home::locate_file(&home, &file)?;
-            home.graph()?.check_out(&conn.drive_id, &id).await?;
+            let graph = home.graph()?;
+            graph.check_out(&conn.drive_id, &id).await?;
+            let cat = home.catalog()?;
+            let before = cat.checkouts(conn.id)?;
+            let me = graph.me().await.map(|(n, _)| n).unwrap_or_default();
+            cat.note_checkout(conn.id, &id, Some(&me), drivecraft::problems::unix_now())?;
+            let _ = drivecraft::checkouts::show_in_explorer(&cat, &conn, &before);
             println!("Checked out {rel}");
         }
         Cmd::Checkin { file, comment } => {
             let (conn, id, rel) = home::locate_file(&home, &file)?;
             home.graph()?.check_in(&conn.drive_id, &id, &comment).await?;
+            let cat = home.catalog()?;
+            let before = cat.checkouts(conn.id)?;
+            cat.note_checkout(conn.id, &id, None, drivecraft::problems::unix_now())?;
+            let _ = drivecraft::checkouts::show_in_explorer(&cat, &conn, &before);
             println!("Checked in {rel}");
+        }
+        Cmd::RecycleBin { name, restore, whole_site, find } => {
+            let cat = home.catalog()?;
+            let c = cat.connection(&name)?.ok_or_else(|| anyhow!("no connection named '{name}'. Run: drivecraft list"))?;
+            let graph = home.graph()?;
+            let site = graph.site_of(&c.drive_id).await?;
+            if !restore.is_empty() {
+                graph.restore_binned(&site, &restore).await?;
+                println!("Restored {} item(s). They return to this computer on the next synchronization.", restore.len());
+                return Ok(true);
+            }
+            let all = graph.recycle_bin(&site, 100_000).await?;
+            let words: Vec<String> = find.unwrap_or_default().split_whitespace().map(str::to_lowercase).collect();
+            let list: Vec<_> = all
+                .iter()
+                .filter(|b| whole_site || b.is_from(&site.library_path))
+                .filter(|b| {
+                    let hay = format!("{} {} {}", b.name, b.from, b.deleted_by).to_lowercase();
+                    words.iter().all(|w| hay.contains(w))
+                })
+                .collect();
+            if list.is_empty() {
+                println!("{}: the recycle bin has nothing from this library", c.name);
+            }
+            for b in list {
+                println!("{}  {}  {}/{}  ({}, deleted by {})", b.id, b.deleted_at, b.from, b.name, human_bytes(b.size), b.deleted_by);
+            }
         }
         Cmd::Doctor => {
             println!("DriveCraft {}", env!("CARGO_PKG_VERSION"));

@@ -70,7 +70,7 @@ pub struct LocalRow {
 }
 
 pub struct Catalog {
-    db: rusqlite::Connection,
+    pub(crate) db: rusqlite::Connection,
 }
 
 const SCHEMA: &str = "
@@ -118,6 +118,25 @@ CREATE TABLE IF NOT EXISTS local_items(
   PRIMARY KEY(conn_id, id)
 ) WITHOUT ROWID;
 CREATE UNIQUE INDEX IF NOT EXISTS local_by_path ON local_items(conn_id, rel_path);
+CREATE TABLE IF NOT EXISTS checkouts(
+  conn_id INTEGER NOT NULL,
+  item_id TEXT NOT NULL,
+  by_name TEXT NOT NULL,
+  mine INTEGER NOT NULL,
+  since INTEGER NOT NULL,
+  stale INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(conn_id, item_id)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS problems(
+  conn_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  path TEXT NOT NULL,
+  message TEXT NOT NULL,
+  watch TEXT,
+  first_seen INTEGER NOT NULL,
+  last_seen INTEGER NOT NULL,
+  PRIMARY KEY(conn_id, kind, path)
+) WITHOUT ROWID;
 ";
 
 const REMOTE_COLS: &str =
@@ -248,6 +267,8 @@ impl Catalog {
         let tx = self.db.unchecked_transaction()?;
         tx.execute("DELETE FROM remote_items WHERE conn_id = ?", [id])?;
         tx.execute("DELETE FROM local_items WHERE conn_id = ?", [id])?;
+        tx.execute("DELETE FROM problems WHERE conn_id = ?", [id])?;
+        tx.execute("DELETE FROM checkouts WHERE conn_id = ?", [id])?;
         tx.execute("DELETE FROM connections WHERE id = ?", [id])?;
         tx.commit()?;
         Ok(())

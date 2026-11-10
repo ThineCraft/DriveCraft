@@ -29,6 +29,8 @@
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
       <symbol id="i-checklist" viewBox="0 0 24 24"><path d="m4 7 1.5 1.5L8 6M4 13l1.5 1.5L8 12M11 7h9M11 13h9M4 19h16"/></symbol>
       <symbol id="i-network" viewBox="0 0 24 24"><path d="M9 4h6v5H9zM3 15h6v5H3zM15 15h6v5h-6zM12 9v3M6 15v-3h12v3"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3M12 14.5v2"/></symbol>
+      <symbol id="i-bin" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></symbol>
       <symbol id="i-min" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
     </defs>
   </svg>
@@ -156,6 +158,24 @@
               </div>
               <span class="badge amber" id="mode-fixed" hidden>Ingest</span>
               <p class="muted small" id="mode-help"></p>
+              <div id="explorer-box">
+                <div class="pop-title">File Explorer</div>
+                <label class="switch" title="List this folder in File Explorer, with a status icon beside each file">
+                  <input type="checkbox" id="explorer-on">
+                  <span class="track" aria-hidden="true"></span>
+                  <span>Show in File Explorer</span>
+                </label>
+                <div id="explorer-more" hidden>
+                  <label class="small">Name on this computer
+                    <input id="explorer-name" spellcheck="false" autocomplete="off">
+                  </label>
+                  <div class="explorer-buttons">
+                    <button class="btn quiet" id="explorer-apply">Rename</button>
+                    <button class="btn quiet" id="explorer-icon">Choose icon…</button>
+                  </div>
+                </div>
+                <p class="muted small">Shows a status icon beside each file and adds Check out and Check in to the right-click menu. The name and icon are for this computer only.</p>
+              </div>
               <div class="pop-title">Other computers</div>
               <button class="btn quiet" id="seed-publish">Publish a seed</button>
               <p class="muted small">Stores a snapshot of this library's file list in the library, so other computers start from it instead of scanning everything.</p>
@@ -188,6 +208,18 @@
           </button>
         </div>
         <p class="banner bad" id="conn-missing" hidden>This folder was not found. If it is on a drive that is disconnected, reconnect it. DriveCraft will not synchronize, or delete anything, while it is missing.</p>
+
+        <button class="problems-bar" id="problems-bar" hidden title="See what needs your attention in this library">
+          <svg class="ic"><use href="#i-warning"/></svg>
+          <span id="problems-text"></span>
+          <span class="go">View</span>
+        </button>
+
+        <button class="problems-bar notice" id="checkouts-bar" hidden title="See the files that are checked out in this library">
+          <svg class="ic"><use href="#i-lock"/></svg>
+          <span id="checkouts-text"></span>
+          <span class="go">View</span>
+        </button>
 
         <div class="stats">
           <div class="stat"><span class="stat-label">Files in library</span><span class="num" id="stat-files">–</span></div>
@@ -242,7 +274,10 @@
         </div>
 
         <div class="detail-foot">
-          <button class="textlink" id="conn-open"><svg class="ic"><use href="#i-folder-open"/></svg>Open local folder</button>
+          <span class="foot-links">
+            <button class="textlink" id="conn-open"><svg class="ic"><use href="#i-folder-open"/></svg>Open local folder</button>
+            <button class="textlink" id="bin-open" title="See what was deleted from this library, and put it back"><svg class="ic"><use href="#i-bin"/></svg>Recycle bin</button>
+          </span>
           <span class="protect"><svg class="ic"><use href="#i-shield"/></svg><span id="foot-protect"></span></span>
         </div>
       </section>
@@ -260,10 +295,15 @@
       </span>
     </span>
     <span class="status-tools">
-      <label class="switch" id="auto-wrap" hidden title="Synchronize every connected library once a minute while DriveCraft is running">
+      <label class="switch" id="auto-wrap" hidden title="Synchronize as soon as files change on this computer, and check the server once a minute, while DriveCraft is running">
         <input type="checkbox" id="auto-sync">
         <span class="track" aria-hidden="true"></span>
         <span>Keep in sync</span>
+      </label>
+      <label class="switch" id="autostart-wrap" hidden title="Start DriveCraft in the tray when you sign in to this computer">
+        <input type="checkbox" id="autostart">
+        <span class="track" aria-hidden="true"></span>
+        <span>Start with Windows</span>
       </label>
       <span class="theme" id="theme" role="radiogroup" aria-label="Theme">
         <button role="radio" data-theme-choice="system">System</button>
@@ -312,6 +352,93 @@
         <button class="btn primary" id="add-submit" value="connect">Connect</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- Problems in one library -->
+  <dialog id="problems-dialog">
+    <div class="dialog-body">
+      <h2 id="problems-title"></h2>
+      <p class="muted small">Most of these clear by themselves once they are fixed and the library synchronizes again. Notices stay until you dismiss them.</p>
+      <p class="muted" id="problems-none" hidden>Nothing needs your attention in this library.</p>
+      <div class="problems" id="problems-list"></div>
+      <p class="error" id="problems-error" hidden></p>
+      <div class="actions">
+        <button type="button" class="btn quiet" id="problems-dismiss-all">Dismiss all notices</button>
+        <button type="button" class="btn quiet" id="problems-retry">Try again now</button>
+        <button type="button" class="btn primary" id="problems-close" autofocus>Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Checked-out files in one library -->
+  <dialog id="checkouts-dialog">
+    <div class="dialog-body">
+      <h2 id="checkouts-title"></h2>
+      <p class="muted small">A checked-out file can only be changed by the person who holds it. Changes you make to a file someone else holds will not upload until they check it in.</p>
+      <p class="muted" id="checkouts-none" hidden>Nothing is checked out in this library.</p>
+      <div class="problems" id="checkouts-list"></div>
+      <label class="small" id="checkouts-comment-wrap">Comment for the next check-in
+        <input id="checkouts-comment" autocomplete="off" placeholder="What changed (optional)">
+      </label>
+      <p class="error" id="checkouts-error" hidden></p>
+      <div class="actions">
+        <button type="button" class="btn quiet" id="checkouts-refresh">Ask the server again</button>
+        <button type="button" class="btn primary" id="checkouts-close" autofocus>Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- The library's recycle bin -->
+  <dialog id="bin-dialog">
+    <div class="dialog-body">
+      <h2 id="bin-title"></h2>
+      <input id="bin-filter" type="search" autocomplete="off" spellcheck="false" autofocus
+             placeholder="Type any part of the name, the folder, or who deleted it">
+      <div class="bin-tools">
+        <select id="bin-when" aria-label="Deleted when">
+          <option value="">Deleted any time</option>
+          <option value="1">Today</option>
+          <option value="2">Since yesterday</option>
+          <option value="7">Last 7 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="-30">More than 30 days ago</option>
+        </select>
+        <select id="bin-who" aria-label="Deleted by"></select>
+        <select id="bin-kind" aria-label="Kind of file">
+          <option value="">Any kind</option>
+          <option value="doc">Documents</option>
+          <option value="sheet">Spreadsheets</option>
+          <option value="slides">Presentations</option>
+          <option value="pdf">PDFs</option>
+          <option value="image">Pictures</option>
+          <option value="media">Video and sound</option>
+          <option value="zip">Archives</option>
+          <option value="none">Folders and files with no type</option>
+          <option value="other">Everything else</option>
+        </select>
+        <select id="bin-scope" aria-label="Where it was deleted from">
+          <option value="lib">This library</option>
+          <option value="site">Whole site</option>
+        </select>
+        <select id="bin-sort" aria-label="Order">
+          <option value="new">Newest first</option>
+          <option value="old">Oldest first</option>
+          <option value="name">By name</option>
+          <option value="big">Largest first</option>
+        </select>
+        <button type="button" class="textlink small" id="bin-clear" hidden>Clear filters</button>
+      </div>
+      <p class="muted small" id="bin-status" role="status" aria-live="polite"></p>
+      <div class="problems" id="bin-list"></div>
+      <p class="error" id="bin-error" hidden></p>
+      <div class="actions">
+        <span class="muted small bin-note">Restored files return to this computer on the next sync.</span>
+        <button type="button" class="btn quiet" id="bin-reload" title="Ask the server for the list again">Refresh</button>
+        <button type="button" class="btn quiet" id="bin-sync" hidden>Sync now</button>
+        <button type="button" class="btn amber" id="bin-restore" hidden></button>
+        <button type="button" class="btn primary" id="bin-close">Close</button>
+      </div>
+    </div>
   </dialog>
 
   <!-- Confirmations -->
