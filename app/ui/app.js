@@ -472,6 +472,36 @@ function spanWords(secs) {
   if (h < 48) return `${h} h ${String(m % 60).padStart(2, "0")} min`;
   return `${Math.floor(h / 24)} days ${h % 24} h`;
 }
+// The run's speed over the last hour, drawn faintly on graph paper behind the
+// estimate: when the estimate moves, the shape behind it shows why. The right-hand
+// edge is now; the left-hand edge is an hour ago.
+const speedOf = {};
+function noteSpeed(name, bytesPerSecond) {
+  const HOUR = 3600000, EVERY = 15000;
+  const s = speedOf[name] || (speedOf[name] = []);
+  const now = Date.now();
+  if (s.length && now - s[s.length - 1].t < EVERY) return;
+  s.push({ t: now, v: bytesPerSecond });
+  while (s.length && now - s[0].t > HOUR) s.shift();
+}
+function drawSpeed(name) {
+  const HOUR = 3600000;
+  for (const n of Object.keys(speedOf)) if (!progressOf[n]) delete speedOf[n];
+  const s = speedOf[name];
+  const line = $("progress-graph-line");
+  const area = $("progress-graph-area");
+  if (!s || s.length < 2) { line.setAttribute("d", ""); area.setAttribute("d", ""); return; }
+  const now = Date.now();
+  // Room is left above the highest point, so the line stays clear of the words.
+  const top = Math.max(...s.map((p) => p.v)) * 1.7 || 1;
+  const x = (t) => Math.max(0, 100 * (1 - (now - t) / HOUR)).toFixed(2);
+  const y = (v) => (100 - (100 * v) / top).toFixed(2);
+  const xy = s.map((p) => `${x(p.t)} ${y(p.v)}`);
+  const last = s[s.length - 1];
+  line.setAttribute("d", `M${xy.join(" L")} L100 ${y(last.v)}`);
+  area.setAttribute("d", `M${x(s[0].t)} 100 L${xy.join(" L")} L100 ${y(last.v)} L100 100 Z`);
+}
+
 // The estimate is there to answer "how long?" once and then be left alone. It is
 // taken from the pace so far, counts down by the clock, and is only taken again
 // every half hour, after a short "Recalculating…". The counts and the bar beside
@@ -486,6 +516,7 @@ function renderProgress() {
   const c = selected && current();
   $("progress").hidden = !p || !c || !isBusy(c);
   if ($("progress").hidden) return;
+  drawSpeed(selected);
   const doing = p.verb === "uploaded" ? "Uploaded" : "Downloaded";
   $("progress-fill").style.width = `${(100 * (p.total_bytes > 0 ? p.bytes / p.total_bytes : p.done / Math.max(1, p.total))).toFixed(2)}%`;
   $("progress-count").textContent =
@@ -528,7 +559,7 @@ function renderProgress() {
     : days < 7 ? ` on ${weekday}`
     : days <= 31 ? ` on ${weekday} the ${nth}`
     : ` on ${weekday} ${nth}, ${end.toLocaleDateString([], { month: "long" })}`;
-  say(`Estimated ${spanWords(left)} left`, `Estimated to finish around ${end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}${day}`);
+  say(`Estimated ${spanWords(left)} left`, `Approx. ${end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}${day}`);
 }
 setInterval(() => { if (state && !$("view-main").hidden) renderProgress(); }, 1000);
 
@@ -1708,6 +1739,7 @@ listen("sync-started", (ev) => {
 listen("sync-log", (ev) => pushLog(ev.payload.name, ev.payload.line));
 listen("sync-progress", (ev) => {
   progressOf[ev.payload.name] = Object.assign({ at: Date.now() }, ev.payload);
+  noteSpeed(ev.payload.name, ev.payload.bytes_per_second);
   if (ev.payload.name === selected) renderProgress();
 });
 $("brand-link").addEventListener("click", () => invoke("open_site").catch(toast));

@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <div class="shine" aria-hidden="true"></div>
   <!-- Icons, defined once and reused with <use>. -->
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
     <defs>
@@ -239,6 +240,9 @@
         </div>
 
         <div class="progress" id="progress" hidden role="status">
+          <svg class="progress-graph" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            <path id="progress-graph-area" d=""/><path id="progress-graph-line" d=""/>
+          </svg>
           <div class="progress-top">
             <span class="progress-left"><svg class="ic"><use href="#i-clock"/></svg><span id="progress-left"></span></span>
             <span class="muted" id="progress-until"></span>

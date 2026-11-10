@@ -52,6 +52,7 @@
 /* Light: warm paper backdrop, a white bed, deeper blue and amber for contrast. */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
+    --shine: #ffffffb8;
     color-scheme: light;
     --bg-a: #e9eff7;
     --bg-b: #f6f0e6;
@@ -83,6 +84,7 @@
   }
 }
 :root[data-theme="light"] {
+  --shine: #ffffffb8;
   color-scheme: light;
   --bg-a: #e9eff7;
   --bg-b: #f6f0e6;
@@ -116,6 +118,26 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
+
+/* Now and then a soft band of light crosses the window's backdrop, from the top
+   left to the bottom right, behind everything else. It is only there so that a
+   window someone is watching through a long run does not look frozen. */
+:root { --shine-every: 300s; }
+.shine { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
+.shine::before {
+  content: ""; position: absolute; inset: -20%;
+  background: linear-gradient(135deg, transparent 40%, var(--shine, #ffffff24) 50%, transparent 60%);
+  filter: blur(14px);
+  transform: translate(-100%, -100%);
+  animation: shine var(--shine-every) linear infinite;
+}
+/* One second of movement, then nothing until the next turn. */
+@keyframes shine {
+  0% { transform: translate(-100%, -100%); }
+  0.3333% { transform: translate(100%, 100%); }
+  100% { transform: translate(100%, 100%); }
+}
+@media (prefers-reduced-motion: reduce) { .shine::before { animation: none; } }
 body {
   margin: 0;
   color: var(--text);
@@ -438,6 +460,19 @@ select.on { border-color: var(--blue); color: var(--blue-soft-ink); font-weight:
 .progress { margin-top: 1.1rem; padding: .95rem 1.1rem; border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--line)); border-radius: var(--radius); background: color-mix(in srgb, var(--blue) 7%, var(--bed-2)); }
 .progress.stuck { border-color: var(--warn-line); background: var(--warn-bg); }
 .progress.stuck .progress-left .ic, .progress.stuck #progress-until { color: var(--amber-ink); }
+.progress { position: relative; overflow: hidden; }
+.progress > :not(.progress-graph) { position: relative; }
+.progress-graph { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
+  /* Graph paper: fine lines, and a slightly firmer one every fifth. */
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--blue) 9%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--blue) 9%, transparent) 1px, transparent 1px),
+    linear-gradient(to right, color-mix(in srgb, var(--blue) 5%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--blue) 5%, transparent) 1px, transparent 1px);
+  background-size: 60px 60px, 60px 60px, 12px 12px, 12px 12px;
+  background-position: right bottom; }
+#progress-graph-area { fill: color-mix(in srgb, var(--blue) 10%, transparent); stroke: none; }
+#progress-graph-line { fill: none; stroke: color-mix(in srgb, var(--blue) 38%, transparent); stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
 .progress-top { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .progress-left { display: inline-flex; align-items: center; gap: .6rem; font-size: 1.35rem; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 .progress-left .ic { color: var(--blue); }
