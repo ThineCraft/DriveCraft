@@ -160,6 +160,17 @@ enum Cmd {
     },
     /// Stop synchronizing a library. Local files are left where they are.
     Disconnect { name: String },
+    /// Show a file's library details (its columns), or change them.
+    Details {
+        file: PathBuf,
+        /// Set a column, as NAME=VALUE. NAME is the column's own name, shown in
+        /// brackets by this command. An empty value clears it. May be repeated.
+        #[arg(long)]
+        set: Vec<String>,
+        /// Also show columns DriveCraft does not normally show.
+        #[arg(long)]
+        all: bool,
+    },
     /// List the files that are checked out in a library, and by whom.
     Checkouts { name: Option<String> },
     /// Check a file out so that others cannot change it.
@@ -630,6 +641,30 @@ async fn run(cli: Cli) -> Result<bool> {
             drivecraft::explorer::turn_off(&c)?;
             cat.remove_connection(c.id)?;
             println!("Disconnected '{}'. The files in {} were left as they are.", c.name, c.local_path.display());
+        }
+        Cmd::Details { file, set, all } => {
+            let (conn, id, rel) = home::locate_file(&home, &file)?;
+            let graph = home.graph()?;
+            let columns = graph.library_columns(&conn.drive_id).await?;
+            if !set.is_empty() {
+                let mut changes = serde_json::Map::new();
+                for pair in &set {
+                    let (name, value) = pair.split_once('=').ok_or_else(|| anyhow!("write --set as NAME=VALUE"))?;
+                    let col = columns
+                        .iter()
+                        .find(|c| c.name.eq_ignore_ascii_case(name.trim()))
+                        .ok_or_else(|| anyhow!("this library has no column named '{}'", name.trim()))?;
+                    changes.insert(col.name.clone(), drivecraft::details::to_server(col, value.trim()).map_err(|e| anyhow!(e))?);
+                }
+                graph.set_item_fields(&conn.drive_id, &id, &serde_json::Value::Object(changes)).await?;
+                println!("Saved.");
+            }
+            let fields = graph.item_fields(&conn.drive_id, &id).await?;
+            println!("{rel}  ({})", conn.name);
+            for c in columns.iter().filter(|c| all || drivecraft::details::worth_showing(c)) {
+                let value = drivecraft::details::as_text(fields.values.get(&c.name));
+                println!("  {} [{}]{}: {}", c.title, c.name, if c.read_only { " (read only)" } else { "" }, value);
+            }
         }
         Cmd::Checkouts { name } => {
             let cat = home.catalog()?;

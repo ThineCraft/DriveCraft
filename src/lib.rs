@@ -3,6 +3,7 @@
 
 pub mod catalog;
 pub mod checkouts;
+pub mod details;
 pub mod engine;
 pub mod explorer;
 pub mod paths;

@@ -386,9 +386,21 @@ select.on { border-color: var(--blue); color: var(--blue-soft-ink); font-weight:
 #syncbtn-wrap p { margin: .35rem 0 0; line-height: 1.35; }
 .banner.from-browser { background: color-mix(in srgb, var(--blue) 10%, var(--bed-2)); border-color: color-mix(in srgb, var(--blue) 40%, var(--line)); margin: .8rem 0 0; }
 
+#details-dialog { width: min(640px, calc(100vw - 2rem)); }
+.details-fields { max-height: 52vh; overflow: auto; margin-top: .4rem; padding-right: .3rem; }
+.details-fields label { margin-top: .8rem; }
+.details-fields textarea { width: 100%; min-height: 4.5rem; margin-top: .35rem; padding: .6rem .75rem; border-radius: 10px; border: 1px solid var(--line); background: var(--field); color: var(--text); font: inherit; font-weight: 400; resize: vertical; }
+.details-fields select { width: 100%; margin-top: .35rem; padding: .6rem .75rem; font-size: 1rem; }
+.details-fields .fixed { margin-top: .35rem; font-weight: 400; color: var(--muted); user-select: text; -webkit-user-select: text; }
+.details-fields .picks { display: flex; flex-wrap: wrap; gap: .3rem 1rem; margin-top: .35rem; }
+.details-fields .req { color: var(--bad); }
+.details-fields label.changed > input, .details-fields label.changed > textarea, .details-fields label.changed > select { border-color: var(--blue); }
+.actions .spacer { flex: 1; }
+
 /* Dialogs */
 dialog { border: 1px solid var(--line); border-radius: 22px; background: var(--bed); color: var(--text); padding: 0; width: min(580px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); box-shadow: 0 30px 80px #000a; }
-dialog::backdrop { background: #050c14b3; }
+/* Behind a dialog everything is dimmed and blurred, so only the dialog draws the eye. */
+dialog::backdrop { background: #050c1499; backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px); }
 .dialog-body { padding: 1.5rem 1.6rem; }
 #confirm-dialog { width: min(450px, calc(100vw - 2rem)); }
 .toast { position: fixed; left: 50%; bottom: 1.2rem; transform: translateX(-50%); background: var(--bed); border: 1px solid var(--bad); color: var(--text); padding: .65rem 1rem; border-radius: var(--radius); max-width: min(640px, calc(100vw - 2rem)); white-space: pre-wrap; z-index: 50; box-shadow: 0 12px 34px #0008; }

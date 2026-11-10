@@ -318,9 +318,10 @@ mod imp {
     /// Offer "Check out" and "Check in" when a file inside one of `folders` is
     /// right-clicked. With no folders, the entries are taken away.
     pub fn set_menu(app: &Path, folders: &[PathBuf]) -> Result<()> {
-        const VERBS: [(&str, &str, &str); 2] = [
+        const VERBS: [(&str, &str, &str); 3] = [
             ("DriveCraft.CheckOut", "Check out", "--check-out"),
             ("DriveCraft.CheckIn", "Check in", "--check-in"),
+            ("DriveCraft.Details", "Library details", "--details"),
         ];
         for (verb, _, _) in VERBS {
             remove_key(&format!(r"Software\Classes\*\shell\{verb}"));

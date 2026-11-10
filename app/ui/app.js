@@ -213,6 +213,7 @@ function render() {
   $("autostart").checked = state.autostart;
   renderSyncButton();
   if (syncLinkWaiting) handleSyncLink();
+  if (detailsWaiting) handleDetailsRequest();
   $("version").textContent = `DriveCraft ${state.version}`;
   $("computer-os").textContent = state.is_windows ? "Windows" : navigator.platform || "";
   $("lib-count").textContent = String(state.connections.length);
@@ -677,6 +678,167 @@ $("explorer-icon").addEventListener("click", async () => {
     if (picked) await setExplorer(true, picked);
   } catch (e) { toast(e); }
 });
+
+// A file's library details: its values in the columns the library defines.
+let detailsData = null;
+let detailsWaiting = true; // File Explorer may have started the app to show some
+const detailsInputs = {};
+function detailsError(e) {
+  $("details-error").textContent = e ? String(e) : "";
+  $("details-error").hidden = !e;
+}
+// A stored value as the text its input holds; the same form is used to tell what changed.
+function detailsText(c) {
+  const v = c.value;
+  if (v === null || v === undefined) return "";
+  if (c.kind === "yes_no") return v ? "yes" : "no";
+  if (Array.isArray(v)) return v.join("; ");
+  if (c.kind === "date") {
+    const d = new Date(v);
+    if (isNaN(d)) return "";
+    const pad = (n) => String(n).padStart(2, "0");
+    const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    return c.date_only ? day : `${day}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  return String(v);
+}
+// What an input holds now, as the text the core expects.
+function detailsTyped(c) {
+  const input = detailsInputs[c.name];
+  if (c.kind === "choice" && c.multi) return [...input.querySelectorAll("input:checked")].map((x) => x.value).join("; ");
+  if (c.kind === "yes_no") return input.value;
+  return input.value.trim();
+}
+function detailsToSend(c, typed) {
+  if (c.kind !== "date" || !typed) return typed;
+  // A day, or a day and time, as this computer's clock means it.
+  const d = c.date_only ? new Date(`${typed}T00:00`) : new Date(typed);
+  return isNaN(d) ? typed : d.toISOString();
+}
+function detailsChanges() {
+  const out = {};
+  for (const c of detailsData.columns) {
+    if (c.editable && detailsTyped(c) !== detailsText(c)) out[c.name] = detailsToSend(c, detailsTyped(c));
+  }
+  return out;
+}
+function detailsTouched() {
+  for (const c of detailsData.columns) {
+    if (c.editable) detailsInputs[c.name].closest("label, fieldset").classList.toggle("changed", detailsTyped(c) !== detailsText(c));
+  }
+  $("details-save").disabled = Object.keys(detailsChanges()).length === 0;
+}
+function renderDetails() {
+  const d = detailsData;
+  const name = d.path.split("/").pop();
+  $("details-title").textContent = name;
+  const folder = d.path.includes("/") ? d.path.slice(0, d.path.lastIndexOf("/")) : "Top of the library";
+  $("details-sub").textContent = `${d.connection} \u00b7 ${folder}` + (d.modified_by ? ` \u00b7 last changed by ${d.modified_by}` : "");
+  $("details-status").textContent = d.columns.some((c) => c.editable) ? "" : "This library has no details that can be changed here.";
+  const box = $("details-fields");
+  box.replaceChildren();
+  for (const c of d.columns) {
+    const title = el("span", { text: c.title });
+    if (c.required && c.editable) title.append(el("span", { class: "req", text: " *", title: "Must have a value" }));
+    const now = detailsText(c);
+    let input;
+    if (!c.editable) {
+      const shown = c.kind === "date" && c.value ? new Date(c.value).toLocaleString() : now;
+      box.append(el("label", {}, title, el("div", { class: "fixed", text: shown || "\u2014" })));
+      continue;
+    }
+    if (c.kind === "choice" && c.multi) {
+      input = el("div", { class: "picks" }, ...c.choices.map((ch) => {
+        const tick = el("input", { type: "checkbox", value: ch });
+        tick.checked = Array.isArray(c.value) && c.value.includes(ch);
+        return el("label", { class: "check" }, tick, ` ${ch}`);
+      }));
+      detailsInputs[c.name] = input;
+      box.append(el("fieldset", {}, el("legend", {}, title), input));
+      continue;
+    }
+    if (c.kind === "choice") {
+      const options = c.choices.includes(now) || !now ? c.choices : [now, ...c.choices];
+      input = el("select", {}, el("option", { value: "", text: c.required ? "Choose\u2026" : "(none)" }), ...options.map((ch) => el("option", { value: ch, text: ch })));
+    } else if (c.kind === "yes_no") {
+      input = el("select", {}, ...(c.value === null || c.value === undefined ? [el("option", { value: "", text: "(not set)" })] : []),
+        el("option", { value: "yes", text: "Yes" }), el("option", { value: "no", text: "No" }));
+    } else if (c.kind === "note") {
+      input = el("textarea", { spellcheck: "true" });
+    } else {
+      input = el("input", { type: c.kind === "number" ? "number" : c.kind === "date" ? (c.date_only ? "date" : "datetime-local") : "text", autocomplete: "off" });
+      if (c.kind === "number") input.setAttribute("step", "any");
+    }
+    input.value = now;
+    detailsInputs[c.name] = input;
+    const label = el("label", {}, title, input);
+    if (c.description) label.append(el("span", { class: "muted small", text: c.description }));
+    box.append(label);
+  }
+  detailsTouched();
+}
+async function openDetails(file) {
+  for (const d of document.querySelectorAll("dialog[open]")) d.close();
+  detailsData = null;
+  detailsError(null);
+  $("details-title").textContent = file.split(/[\\/]/).pop();
+  $("details-sub").textContent = "";
+  $("details-status").textContent = "Asking the server\u2026";
+  $("details-fields").replaceChildren();
+  $("details-save").disabled = true;
+  $("details-web").hidden = true;
+  $("details-dialog").showModal();
+  try {
+    detailsData = await invoke("file_details", { file });
+    // Show the file's own library behind the panel, whichever was open before.
+    if (state.connections.some((c) => c.name === detailsData.connection) && selected !== detailsData.connection) {
+      selected = detailsData.connection;
+      renderList();
+      renderDetail();
+    }
+    $("details-web").hidden = false;
+    renderDetails();
+  } catch (e) {
+    $("details-status").textContent = "";
+    detailsError(e);
+  }
+}
+$("details-fields").addEventListener("input", () => { if (detailsData) detailsTouched(); });
+$("details-fields").addEventListener("change", () => { if (detailsData) detailsTouched(); });
+$("details-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  if (!detailsData) return;
+  const changes = detailsChanges();
+  if (!Object.keys(changes).length) return;
+  $("details-save").disabled = true;
+  $("details-save").textContent = "Saving\u2026";
+  try {
+    detailsData = await invoke("save_details", { file: detailsData.file, changes });
+    detailsError(null);
+    renderDetails();
+    $("details-status").textContent = "Saved to the library.";
+  } catch (e) {
+    detailsError(e);
+    $("details-save").disabled = false;
+  }
+  $("details-save").textContent = "Save";
+});
+$("details-close").addEventListener("click", () => $("details-dialog").close());
+$("details-web").addEventListener("click", () => invoke("open_in_library", { file: detailsData.file }).then(() => detailsError(null), detailsError));
+$("details-open").addEventListener("click", async () => {
+  closePops();
+  try {
+    const file = await invoke("pick_library_file", { name: selected });
+    if (file) openDetails(file);
+  } catch (e) { toast(e); }
+});
+async function handleDetailsRequest() {
+  if ($("view-main").hidden) return;
+  detailsWaiting = false;
+  const file = await invoke("take_details_request").catch(() => null);
+  if (file) openDetails(file);
+}
+listen("details", () => { detailsWaiting = true; handleDetailsRequest(); });
 
 // The recycle bin of the selected library's site. The whole list is fetched once,
 // newest deletions first, and kept for the session, so finding something is a matter

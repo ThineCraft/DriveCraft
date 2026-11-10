@@ -39,6 +39,19 @@
       { kind: "long_path", level: "notice", lasting: true, path: "Projects/2026/Port Authority/Environmental impact assessment/Appendices/Appendix C - Marine survey raw data/Station 14/readings-final-v3.csv", message: "Its full path on this computer is longer than 260 characters. It is synchronized, but some programs will not open it.", first_seen: now - 172800, last_seen: now - 172800 },
     ],
   };
+  const col = (name, title, kind, value, extra) => Object.assign({ name, title, kind, editable: true, required: false, choices: [], multi: false, date_only: false, description: "", value }, extra || {});
+  const mockDetails = { connection: "TTSEC", path: "Finance/FY27/Budget model.xlsx", modified_by: "Anita Ali", created_by: "Shawn Lewis", columns: [
+    col("Title", "Title", "text", "FY27 budget model"),
+    col("Department", "Department", "choice", "Finance", { choices: ["Finance", "Legal", "Operations"], required: true }),
+    col("Status", "Approval status", "choice", "Draft", { choices: ["Draft", "In review", "Approved"] }),
+    col("Regions", "Regions", "choice", ["North"], { choices: ["North", "South", "East", "West"], multi: true }),
+    col("Due", "Review due", "date", "2026-11-30T04:00:00Z", { date_only: true }),
+    col("Pages", "Pages", "number", 42),
+    col("Final", "Final version", "yes_no", false),
+    col("Notes", "Notes", "note", "Waiting on Q3 actuals.", { description: "Anything reviewers should know" }),
+    col("Owner", "Owner", "other", null, { editable: false }),
+    col("_UIVersionString", "Version", "text", "12.0", { editable: false }),
+  ] };
   const checkouts = {
     TTSEC: [
       { item_id: "1", path: "Finance/FY27/Budget model.xlsx", by: "Shawn Lewis", mine: true, since: now - 3600 },
@@ -71,6 +84,15 @@
       problems[name] = (problems[name] || []).filter((p) => !p.lasting || (kind && !(p.kind === kind && p.path === path)));
     },
     async show_problem() {},
+    async pick_library_file() { return "C:\\Work\\TTSEC\\Finance\\FY27\\Budget model.xlsx"; },
+    async take_details_request() { return null; },
+    async open_in_library() {},
+    async file_details({ file }) { await wait(400); return JSON.parse(JSON.stringify(Object.assign({ file }, mockDetails))); },
+    async save_details({ file, changes }) {
+      await wait(500);
+      for (const c of mockDetails.columns) if (c.name in changes) c.value = c.kind === "yes_no" ? changes[c.name] === "yes" : c.multi ? changes[c.name].split("; ").filter(Boolean) : changes[c.name] || null;
+      return JSON.parse(JSON.stringify(Object.assign({ file }, mockDetails)));
+    },
     async set_sync_button({ enabled }) { data.sync_button = { ours: enabled, other: "OneDrive" }; return data.sync_button; },
     async take_sync_link() {
       if (new URLSearchParams(location.search).get("sync") === null || data.linkTaken) return null;

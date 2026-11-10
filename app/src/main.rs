@@ -33,7 +33,11 @@ struct Shared {
     links: std::sync::Mutex<std::collections::HashMap<PathBuf, drivecraft::explorer::Link>>,
     /// A Sync link from the browser that the interface has not dealt with yet.
     sync_link: std::sync::Mutex<Option<String>>,
+    /// A file whose library details File Explorer asked to see.
+    details_for: std::sync::Mutex<Option<String>>,
 }
+
+const DETAILS_ARG: &str = "--details";
 
 /// Arguments File Explorer's right-click menu starts DriveCraft with.
 const CHECK_OUT_ARG: &str = "--check-out";
@@ -267,6 +271,157 @@ fn tell(app: &AppHandle, title: &str, text: &str, good: bool) {
     let _ = app.notification().builder().title(title).body(text).show();
     tray_says(app, &format!("DriveCraft: {title}: {text}"));
     let _ = app.emit("notice", Notice { text: format!("{title}: {text}"), good });
+}
+
+#[derive(Serialize)]
+struct ColumnView {
+    name: String,
+    title: String,
+    kind: drivecraft::graph::ColumnKind,
+    editable: bool,
+    required: bool,
+    choices: Vec<String>,
+    multi: bool,
+    date_only: bool,
+    description: String,
+    value: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct DetailsView {
+    /// The file on this computer, as it was asked for.
+    file: String,
+    connection: String,
+    /// Where the file is inside the library.
+    path: String,
+    modified_by: String,
+    created_by: String,
+    columns: Vec<ColumnView>,
+}
+
+async fn details_of(home: &Home, file: &std::path::Path) -> anyhow::Result<DetailsView> {
+    use drivecraft::details;
+    let (conn, id, rel) = home::locate_file(home, file)?;
+    let graph = home.graph()?;
+    let columns = graph.library_columns(&conn.drive_id).await?;
+    let fields = graph.item_fields(&conn.drive_id, &id).await?;
+    Ok(DetailsView {
+        file: file.display().to_string(),
+        connection: conn.name,
+        path: rel,
+        modified_by: fields.modified_by,
+        created_by: fields.created_by,
+        columns: columns
+            .into_iter()
+            .filter(details::worth_showing)
+            .map(|c| ColumnView {
+                value: fields.values.get(&c.name).cloned().unwrap_or(serde_json::Value::Null),
+                editable: details::editable(&c),
+                name: c.name,
+                title: c.title,
+                kind: c.kind,
+                required: c.required,
+                choices: c.choices,
+                multi: c.multi,
+                date_only: c.date_only,
+                description: c.description,
+            })
+            .collect(),
+    })
+}
+
+/// A file's library details: its values in the columns the library defines.
+#[tauri::command]
+async fn file_details(file: String) -> Result<DetailsView, String> {
+    local(move || async move { details_of(&Home::locate()?, std::path::Path::new(&file)).await }).await
+}
+
+/// Change some of a file's column values. `changes` maps column names to what was
+/// typed; an empty value clears the column. Returns the details as they are now.
+#[tauri::command]
+async fn save_details(file: String, changes: std::collections::HashMap<String, String>) -> Result<DetailsView, String> {
+    local(move || async move {
+        use drivecraft::details;
+        let home = Home::locate()?;
+        let file = PathBuf::from(file);
+        let (conn, id, rel) = home::locate_file(&home, &file)?;
+        let auth = home.authenticator()?;
+        let tokens = auth.current().await.ok_or_else(|| anyhow!("You are not signed in."))?;
+        if !tokens.can_write() {
+            bail!("Changing details changes the library, which needs write access. Sign in again with write access.");
+        }
+        let graph = drivecraft::graph::GraphClient::new(auth);
+        let columns = graph.library_columns(&conn.drive_id).await?;
+        let mut pairs = Vec::new();
+        for (name, typed) in &changes {
+            let col = columns
+                .iter()
+                .find(|c| &c.name == name)
+                .ok_or_else(|| anyhow!("this library has no column named '{name}'"))?;
+            pairs.push((col, details::to_server(col, typed).map_err(|e| anyhow!(e))?));
+        }
+        if !pairs.is_empty() {
+            let n = pairs.len();
+            graph.set_item_fields(&conn.drive_id, &id, &details::changes(pairs)).await?;
+            if let Ok(log) = RunLog::open(&home.dir) {
+                log.line(&format!("changed {n} detail(s) of {rel} in {}", conn.name));
+            }
+        }
+        details_of(&home, &file).await
+    })
+    .await
+}
+
+/// Let the user pick a file of a library, to see its details.
+#[tauri::command]
+async fn pick_library_file(name: String) -> Result<Option<String>, String> {
+    let folder = local(move || async move {
+        let cat = Home::locate()?.catalog()?;
+        let c = cat.connection(&name)?.ok_or_else(|| anyhow!("no connection named '{name}'"))?;
+        Ok(c.local_path)
+    })
+    .await?;
+    let picked = rfd::AsyncFileDialog::new()
+        .set_title("Choose a file to see its library details")
+        .set_directory(&folder)
+        .pick_file()
+        .await;
+    Ok(picked.map(|f| f.path().display().to_string()))
+}
+
+/// The file File Explorer asked about, handed over once.
+#[tauri::command]
+fn take_details_request(app: AppHandle) -> Option<String> {
+    app.state::<Shared>().details_for.lock().unwrap().take()
+}
+
+/// Open a file's page in the library, in the browser.
+#[tauri::command]
+async fn open_in_library(file: String) -> Result<(), String> {
+    local(move || async move {
+        let home = Home::locate()?;
+        let (conn, id, _) = home::locate_file(&home, std::path::Path::new(&file))?;
+        let url = home.graph()?.item_fields(&conn.drive_id, &id).await?.web_url;
+        // Only ever the library's own secure address, as the server reports it.
+        if !url.starts_with("https://") {
+            bail!("the server did not give a web address for this file");
+        }
+        open::that(&url)?;
+        Ok(())
+    })
+    .await
+}
+
+/// File Explorer asked for a file's library details: bring the window up to show them.
+fn details_asked(app: &AppHandle, file: String) {
+    *app.state::<Shared>().details_for.lock().unwrap() = Some(file);
+    show_window(app);
+    let _ = app.emit("details", ());
+}
+
+fn details_arg(args: &[String]) -> Option<String> {
+    let at = args.iter().position(|a| a == DETAILS_ARG)?;
+    args.get(at + 1).cloned()
 }
 
 /// What File Explorer's right-click menu asked for, if these arguments are from it.
@@ -1117,6 +1272,9 @@ fn main() {
             if let Some(url) = sync_link_arg(&args) {
                 return sync_pressed(app, url);
             }
+            if let Some(file) = details_arg(&args) {
+                return details_asked(app, file);
+            }
             match menu_request(&args) {
                 // File Explorer's right-click menu: do it, without bringing the window up.
                 Some((out, file)) => {
@@ -1138,6 +1296,7 @@ fn main() {
             finished: Default::default(),
             links: Default::default(),
             sync_link: Default::default(),
+            details_for: Default::default(),
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
@@ -1159,6 +1318,11 @@ fn main() {
             pick_icon,
             list_checkouts,
             check_file,
+            file_details,
+            save_details,
+            pick_library_file,
+            take_details_request,
+            open_in_library,
             set_sync_button,
             take_sync_link,
             pass_on_sync_link,
@@ -1231,6 +1395,8 @@ fn main() {
             let args: Vec<String> = std::env::args().collect();
             if let Some(url) = sync_link_arg(&args) {
                 sync_pressed(app.handle(), url);
+            } else if let Some(file) = details_arg(&args) {
+                details_asked(app.handle(), file);
             } else if let Some((out, file)) = menu_request(&args) {
                 tauri::async_runtime::spawn(check(app.handle().clone(), out, file, String::new()));
             } else if !args.iter().any(|a| a == HIDDEN_ARG) {

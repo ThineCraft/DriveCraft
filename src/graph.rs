@@ -40,6 +40,84 @@ pub struct DriveInfo {
     pub drive_type: String,
 }
 
+/// What kind of value a library column holds, as far as DriveCraft can show or edit it.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColumnKind {
+    Text,
+    /// Several lines of text.
+    Note,
+    Number,
+    YesNo,
+    Date,
+    Choice,
+    /// A person, a link to another list, a term, a calculation: shown, not edited.
+    Other,
+}
+
+/// A column of a library.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct Column {
+    /// The name the server stores values under.
+    pub name: String,
+    /// The name people see.
+    pub title: String,
+    pub kind: ColumnKind,
+    pub read_only: bool,
+    pub required: bool,
+    pub hidden: bool,
+    /// For a choice: what can be picked.
+    pub choices: Vec<String>,
+    /// For a choice: several may be picked.
+    pub multi: bool,
+    /// For a date: the day only, with no time.
+    pub date_only: bool,
+    pub description: String,
+}
+
+/// A file's values in its library's columns.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct ItemFields {
+    pub values: serde_json::Map<String, Value>,
+    pub web_url: String,
+    pub modified_by: String,
+    pub created_by: String,
+}
+
+fn parse_column(v: &Value) -> Option<Column> {
+    let name = v["name"].as_str()?.to_string();
+    let has = |facet: &str| v.get(facet).is_some_and(|f| !f.is_null());
+    let (kind, multi) = if has("choice") {
+        (ColumnKind::Choice, v["choice"]["displayAs"].as_str() == Some("checkBoxes"))
+    } else if has("text") {
+        (if v["text"]["allowMultipleLines"].as_bool() == Some(true) { ColumnKind::Note } else { ColumnKind::Text }, false)
+    } else if has("number") || has("currency") {
+        (ColumnKind::Number, false)
+    } else if has("boolean") {
+        (ColumnKind::YesNo, false)
+    } else if has("dateTime") {
+        (ColumnKind::Date, false)
+    } else {
+        (ColumnKind::Other, false)
+    };
+    Some(Column {
+        title: v["displayName"].as_str().unwrap_or(&name).to_string(),
+        kind,
+        // A calculated column has a kind of its own but cannot be set.
+        read_only: v["readOnly"].as_bool().unwrap_or(false) || has("calculated"),
+        required: v["required"].as_bool().unwrap_or(false),
+        hidden: v["hidden"].as_bool().unwrap_or(false),
+        choices: v["choice"]["choices"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|c| c.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
+        multi,
+        date_only: v["dateTime"]["format"].as_str() == Some("dateOnly"),
+        description: v["description"].as_str().unwrap_or_default().to_string(),
+        name,
+    })
+}
+
 /// How the recycle bin is asked for: as many items at a time as the server gives.
 /// Newest deletions come first, so what someone is most likely looking for arrives
 /// in the first answer.
@@ -410,6 +488,42 @@ impl<T: TokenSource> GraphClient<T> {
         let site = format!("{},{},{}", link.host(), link.site_id, link.web_id);
         let v = self.get_json(self.url(&["sites", &site, "lists", &link.list_id, "drive"])).await?;
         drive_info(&v).ok_or_else(|| RemoteError::Other("unexpected library description".into()))
+    }
+
+    // ---- a file's columns (library metadata) --------------------------------
+
+    /// The columns a library defines, in the library's own order.
+    pub async fn library_columns(&self, drive_id: &str) -> RemoteResult<Vec<Column>> {
+        let mut url = self.url(&["drives", drive_id, "list", "columns"]);
+        let mut out = Vec::new();
+        loop {
+            let v = self.get_json(url).await?;
+            out.extend(v["value"].as_array().into_iter().flatten().filter_map(parse_column));
+            match v["@odata.nextLink"].as_str() {
+                Some(next) => url = self.trusted_link(next)?,
+                None => return Ok(out),
+            }
+        }
+    }
+
+    /// The values a file has in its library's columns, by column name, with a few
+    /// facts about the file itself.
+    pub async fn item_fields(&self, drive_id: &str, item_id: &str) -> RemoteResult<ItemFields> {
+        let mut u = self.url(&["drives", drive_id, "items", item_id, "listItem"]);
+        u.set_query(Some("$expand=fields"));
+        let v = self.get_json(u).await?;
+        Ok(ItemFields {
+            values: v["fields"].as_object().cloned().unwrap_or_default(),
+            web_url: v["webUrl"].as_str().unwrap_or_default().to_string(),
+            modified_by: v["lastModifiedBy"]["user"]["displayName"].as_str().unwrap_or_default().to_string(),
+            created_by: v["createdBy"]["user"]["displayName"].as_str().unwrap_or_default().to_string(),
+        })
+    }
+
+    /// Change some of a file's column values. `changes` maps column names to values.
+    pub async fn set_item_fields(&self, drive_id: &str, item_id: &str, changes: &Value) -> RemoteResult<()> {
+        let u = self.url(&["drives", drive_id, "items", item_id, "listItem", "fields"]);
+        self.send(true, |c| c.patch(u.clone()).json(changes)).await.map(|_| ())
     }
 
     // ---- the recycle bin ---------------------------------------------------

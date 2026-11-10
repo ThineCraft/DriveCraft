@@ -31,6 +31,7 @@
       <symbol id="i-network" viewBox="0 0 24 24"><path d="M9 4h6v5H9zM3 15h6v5H3zM15 15h6v5h-6zM12 9v3M6 15v-3h12v3"/></symbol>
       <symbol id="i-lock" viewBox="0 0 24 24"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3M12 14.5v2"/></symbol>
       <symbol id="i-bin" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></symbol>
+      <symbol id="i-details" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h6M9 16h6"/></symbol>
       <symbol id="i-min" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
     </defs>
   </svg>
@@ -284,6 +285,7 @@
         <div class="detail-foot">
           <span class="foot-links">
             <button class="textlink" id="conn-open"><svg class="ic"><use href="#i-folder-open"/></svg>Open local folder</button>
+            <button class="textlink" id="details-open" title="See and change the library's details for a file"><svg class="ic"><use href="#i-details"/></svg>File details</button>
             <button class="textlink" id="bin-open" title="See what was deleted from this library, and put it back"><svg class="ic"><use href="#i-bin"/></svg>Recycle bin</button>
           </span>
           <span class="protect"><svg class="ic"><use href="#i-shield"/></svg><span id="foot-protect"></span></span>
@@ -401,6 +403,23 @@
         <button type="button" class="btn primary" id="checkouts-close" autofocus>Close</button>
       </div>
     </div>
+  </dialog>
+
+  <!-- A file's library details -->
+  <dialog id="details-dialog">
+    <form method="dialog" class="dialog-body" id="details-form">
+      <h2 id="details-title"></h2>
+      <p class="muted small" id="details-sub"></p>
+      <p class="muted" id="details-status"></p>
+      <div class="details-fields" id="details-fields"></div>
+      <p class="error" id="details-error" hidden></p>
+      <div class="actions">
+        <button type="button" class="textlink small" id="details-web">Open in SharePoint</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn quiet" id="details-close">Close</button>
+        <button type="submit" class="btn primary" id="details-save" disabled>Save</button>
+      </div>
+    </form>
   </dialog>
 
   <!-- The library's recycle bin -->
