@@ -221,7 +221,7 @@ legend { font-weight: 600; padding: 0; margin-bottom: .2rem; }
 .card h1 { font-size: 1.5rem; margin-bottom: .4rem; }
 .choice-list { margin-top: .8rem; }
 
-.shell { flex: 1; display: grid; grid-template-columns: 196px 1fr; min-height: 0; overflow: hidden; }
+.shell { flex: 1; display: grid; grid-template-columns: 224px 1fr; min-height: 0; overflow: hidden; }
 .sidebar { border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 1.5rem .9rem 1.2rem; min-height: 0; }
 .sidebar .eyebrow { padding: 0 .7rem; }
 .side-head { display: flex; align-items: center; gap: .7rem; padding: 1.1rem .7rem .9rem; font-weight: 650; }
@@ -396,6 +396,40 @@ select.on { border-color: var(--blue); color: var(--blue-soft-ink); font-weight:
 .details-fields .req { color: var(--bad); }
 .details-fields label.changed > input, .details-fields label.changed > textarea, .details-fields label.changed > select { border-color: var(--blue); }
 .actions .spacer { flex: 1; }
+
+.brand-name .ver { font-size: .8rem; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+.conn-list { flex: 1 1 auto; min-height: 0; }
+.conn-find { display: flex; align-items: center; gap: .5rem; margin: 0 0 .5rem; padding: 0 .6rem; border: 1px solid var(--line); border-radius: 10px; background: var(--field); font-weight: 400; }
+.conn-find .ic { width: 15px; height: 15px; color: var(--muted); flex: none; }
+.conn-find input { border: 0 !important; background: none !important; padding: .45rem 0 !important; margin: 0 !important; outline: none; font-size: .9rem; }
+.conn-find:focus-within { outline: 2px solid var(--blue); outline-offset: 1px; }
+.conn-none { padding: .4rem .7rem; margin: 0; }
+.sidebar .add { flex: none; }
+.settings-link { margin-top: .2rem; color: var(--muted); border-top: 1px solid var(--line); border-radius: 0 0 10px 10px; padding-top: .8rem; }
+.settings-link .dot { margin-left: auto; }
+#app-settings-dialog { width: min(520px, calc(100vw - 2rem)); }
+.setting { padding: 1rem 0; border-top: 1px solid var(--line); }
+.setting:first-of-type { margin-top: .9rem; }
+.setting p { margin: .35rem 0 0; line-height: 1.4; }
+.setting .btn { margin-top: .6rem; }
+.setting.warn .strong { color: var(--amber-ink); }
+.scrim { position: fixed; inset: 0; z-index: 15; background: #050c1466; backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px); }
+
+.conn-list.many { gap: 1px; }
+.conn-list.many .conn-item { padding: .42rem .7rem; font-size: .92rem; }
+.conn-list.many .badge { width: 1.35rem; text-align: center; padding: .12rem 0; }
+
+#icon-dialog { width: min(760px, calc(100vw - 2rem)); }
+#icon-find { margin-top: .9rem; }
+.icon-colors { display: flex; gap: .5rem; margin-top: .7rem; }
+.icon-colors button { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; box-shadow: inset 0 0 0 2px var(--bed); }
+.icon-colors button[aria-checked=true] { border-color: var(--text); }
+.icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 4px; height: 44vh; overflow: auto; margin-top: .7rem; padding: 4px; border: 1px solid var(--line); border-radius: 14px; background: var(--inset); align-content: start; }
+.icon-grid button { aspect-ratio: 1; display: grid; place-items: center; border-radius: 10px; border: 2px solid transparent; }
+.icon-grid button:hover { background: var(--bed-2); }
+.icon-grid button[aria-selected=true] { border-color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, var(--bed)); }
+.icon-grid svg { width: 26px; height: 26px; }
+#icon-status { margin: .5rem 0 0; min-height: 1.3em; }
 
 /* Dialogs */
 dialog { border: 1px solid var(--line); border-radius: 22px; background: var(--bed); color: var(--text); padding: 0; width: min(580px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); box-shadow: 0 30px 80px #000a; }

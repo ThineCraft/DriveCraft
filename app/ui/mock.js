@@ -123,7 +123,7 @@
       c.explorer = enabled ? { folder: c.folder, name: label || name, icon: "" } : null;
       return { done: enabled ? c.local_items : 0, failed: 0 };
     },
-    async pick_icon() { return "C:\\Icons\\team.ico"; },
+    async save_icon({ key }) { return `C:\\Users\\you\\AppData\\Local\\ThineCraft\\DriveCraft\\data\\icons\\${key}.ico`; },
     async whoami() { return data.signed_in ? Object.assign({}, who, { can_write: data.can_write }) : null; },
     async save_setup({ clientId, tenant }) { data.setup = { client_id: clientId, tenant: tenant || "organizations" }; data.signed_in = false; },
     async login({ readOnly }) { await wait(900); data.signed_in = true; data.can_write = !readOnly; return Object.assign({}, who, { can_write: data.can_write }); },

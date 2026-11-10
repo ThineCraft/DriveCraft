@@ -241,7 +241,11 @@ async fn set_explorer(
         let now = explorer::shown_as(&c.local_path);
         let label = label.map(|l| l.trim().to_string()).filter(|l| !l.is_empty());
         let label = label.or(now.as_ref().map(|s| s.name.clone())).unwrap_or(c.name.clone());
-        let icon = icon.or(now.map(|s| s.icon)).unwrap_or_else(explorer::default_icon);
+        let icon = match icon.as_deref() {
+            // DriveCraft's own icon, asked for by name.
+            Some("default") => explorer::default_icon(),
+            _ => icon.or(now.map(|s| s.icon)).unwrap_or_else(explorer::default_icon),
+        };
         explorer::turn_on(&cat, &c, &label, &icon)
     })
     .await;
@@ -249,14 +253,23 @@ async fn set_explorer(
     done
 }
 
+/// Keep an icon the interface has drawn, so File Explorer can show it. `key` names
+/// it (the picture and its colour); the same key is the same file.
 #[tauri::command]
-async fn pick_icon() -> Result<Option<String>, String> {
-    let picked = rfd::AsyncFileDialog::new()
-        .set_title("Choose an icon for this folder")
-        .add_filter("Icons", &["ico"])
-        .pick_file()
-        .await;
-    Ok(picked.map(|f| f.path().display().to_string()))
+async fn save_icon(key: String, data: Vec<u8>) -> Result<String, String> {
+    local(move || async move {
+        let plain = !key.is_empty() && key.len() <= 80 && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        // An icon file starts 0 0 1 0 and is small; nothing else is written here.
+        if !plain || data.len() < 22 || data.len() > 2_000_000 || data[..4] != [0, 0, 1, 0] {
+            bail!("that is not an icon DriveCraft made");
+        }
+        let dir = Home::locate()?.dir.join("icons");
+        std::fs::create_dir_all(&dir)?;
+        let file = dir.join(format!("{key}.ico"));
+        std::fs::write(&file, data)?;
+        Ok(file.display().to_string())
+    })
+    .await
 }
 
 #[derive(Serialize, Clone)]
@@ -1315,7 +1328,7 @@ fn main() {
             dismiss_problems,
             show_problem,
             set_explorer,
-            pick_icon,
+            save_icon,
             list_checkouts,
             check_file,
             file_details,

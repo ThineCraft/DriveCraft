@@ -32,7 +32,10 @@
       <symbol id="i-lock" viewBox="0 0 24 24"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3M12 14.5v2"/></symbol>
       <symbol id="i-bin" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></symbol>
       <symbol id="i-details" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h6M9 16h6"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></symbol>
       <symbol id="i-min" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+      <filter id="motion" x="-10%" y="-5%" width="120%" height="110%"><feGaussianBlur id="motion-amount" stdDeviation="0 0"/></filter>
     </defs>
   </svg>
 
@@ -41,7 +44,7 @@
     <div class="brand" data-tauri-drag-region>
       <span class="logo" aria-hidden="true">D</span>
       <span class="brand-text" data-tauri-drag-region>
-        <span class="brand-name">DriveCraft <span class="tag">Prototype</span></span>
+        <span class="brand-name">DriveCraft <span class="ver" id="version"></span><span class="tag">Prototype</span></span>
         <span class="tagline">Your files. In step.</span>
       </span>
     </div>
@@ -117,29 +120,15 @@
         <span>Libraries</span>
         <span class="count" id="lib-count"></span>
       </div>
+      <label class="conn-find" id="conn-find-wrap" hidden>
+        <svg class="ic"><use href="#i-search"/></svg>
+        <input id="conn-find" type="search" autocomplete="off" spellcheck="false" placeholder="Find a library" aria-label="Find a library">
+      </label>
       <nav id="conn-list" class="conn-list" aria-label="Connected libraries"></nav>
+      <p class="muted small conn-none" id="conn-none" hidden>No library matches.</p>
       <button class="add" id="add-button"><svg class="ic"><use href="#i-plus"/></svg><span>Connect a library</span></button>
 
-      <div class="side-foot">
-        <div class="computer">
-          <svg class="ic"><use href="#i-computer"/></svg>
-          <span><span class="strong">This computer</span><br><span class="muted small" id="computer-os"></span></span>
-        </div>
-        <details id="health" hidden>
-          <summary><svg class="ic"><use href="#i-warning"/></svg><span id="health-summary"></span></summary>
-          <p class="small muted" id="health-text"></p>
-        </details>
-        <div id="syncbtn-wrap" hidden>
-          <label class="switch small" title="Decide which program opens when you press Sync on a library in your browser">
-            <input type="checkbox" id="syncbtn">
-            <span class="track" aria-hidden="true"></span>
-            <span>Browser Sync button</span>
-          </label>
-          <p class="small muted" id="syncbtn-note"></p>
-        </div>
-        <button class="textlink small" id="open-logs" title="Every run is recorded in a log file on this computer">Open log folder</button>
-        <div class="small muted" id="version"></div>
-      </div>
+      <button class="add settings-link" id="app-settings-open"><svg class="ic"><use href="#i-gear"/></svg><span>Settings</span><span class="dot warn" id="app-settings-dot" hidden title="Something in Settings is worth a look"></span></button>
     </aside>
 
     <main class="detail" id="detail">
@@ -405,6 +394,24 @@
     </div>
   </dialog>
 
+  <!-- An icon for a library's folder in File Explorer -->
+  <dialog id="icon-dialog">
+    <div class="dialog-body">
+      <h2>Choose an icon</h2>
+      <input id="icon-find" type="search" autocomplete="off" spellcheck="false" placeholder="Search: folder, money, legal, team, building…">
+      <div class="icon-colors" id="icon-colors" role="radiogroup" aria-label="Colour"></div>
+      <div class="icon-grid" id="icon-grid" role="listbox" aria-label="Icons"></div>
+      <p class="muted small" id="icon-status"></p>
+      <p class="error" id="icon-error" hidden></p>
+      <div class="actions">
+        <span class="muted small bin-note">Icons: Font Awesome Free, CC BY 4.0</span>
+        <button type="button" class="btn quiet" id="icon-default">Use DriveCraft’s icon</button>
+        <button type="button" class="btn quiet" id="icon-cancel">Cancel</button>
+        <button type="button" class="btn primary" id="icon-use" disabled>Use this icon</button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- A file's library details -->
   <dialog id="details-dialog">
     <form method="dialog" class="dialog-body" id="details-form">
@@ -475,6 +482,38 @@
     </div>
   </dialog>
 
+  <!-- Settings: things set once and seldom looked at -->
+  <dialog id="app-settings-dialog">
+    <div class="dialog-body">
+      <h2>Settings</h2>
+
+      <section class="setting" id="syncbtn-wrap" hidden>
+        <label class="switch" title="Decide which program opens when you press Sync on a library in your browser">
+          <input type="checkbox" id="syncbtn">
+          <span class="track" aria-hidden="true"></span>
+          <span class="strong">Browser Sync button</span>
+        </label>
+        <p class="small muted" id="syncbtn-note"></p>
+      </section>
+
+      <section class="setting" id="health">
+        <div class="strong" id="health-summary"></div>
+        <p class="small muted" id="health-text"></p>
+      </section>
+
+      <section class="setting">
+        <div class="strong">Logs</div>
+        <p class="small muted">Every run is recorded in a log file, one for each day.</p>
+        <button type="button" class="btn quiet" id="open-logs">Open log folder</button>
+      </section>
+
+      <p class="error" id="app-settings-error" hidden></p>
+      <div class="actions">
+        <button type="button" class="btn primary" id="app-settings-close" autofocus>Close</button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- Confirmations -->
   <dialog id="confirm-dialog">
     <form method="dialog" class="dialog-body">
@@ -486,6 +525,9 @@
       </div>
     </form>
   </dialog>
+
+  <!-- Dims and blurs the window behind the library settings panel. -->
+  <div class="scrim" id="scrim" hidden></div>
 
   <div class="toast" id="toast" role="alert" hidden></div>
 

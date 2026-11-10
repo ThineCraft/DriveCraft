@@ -173,6 +173,7 @@ async function refresh() {
     toast(e);
     return;
   }
+  $("version").textContent = state.version;
   if (state.signed_in && !identity) {
     invoke("whoami").then((who) => { identity = who; renderAccount(); }).catch(() => {});
   }
@@ -214,8 +215,6 @@ function render() {
   renderSyncButton();
   if (syncLinkWaiting) handleSyncLink();
   if (detailsWaiting) handleDetailsRequest();
-  $("version").textContent = `DriveCraft ${state.version}`;
-  $("computer-os").textContent = state.is_windows ? "Windows" : navigator.platform || "";
   $("lib-count").textContent = String(state.connections.length);
   renderAccount();
   renderHealth();
@@ -235,16 +234,17 @@ function renderAccount() {
 }
 
 function renderHealth() {
-  const h = $("health");
-  if (state.is_windows && state.long_paths === false) {
-    h.hidden = false;
-    $("health-summary").textContent = "Long path support is off";
-    $("health-text").textContent =
-      "Files with paths over 260 characters still synchronize, but many programs cannot open them. " +
-      "This is a Windows setting that this computer\u2019s administrator controls; DriveCraft does not change it.";
-  } else {
-    h.hidden = true;
-  }
+  const off = state.is_windows && state.long_paths === false;
+  $("health").hidden = !state.is_windows;
+  $("health").classList.toggle("warn", off);
+  $("health-summary").textContent = off ? "Long path support is off"
+    : state.long_paths === true ? "Long path support is on" : "Long path support could not be read";
+  $("health-text").textContent = off
+    ? "Files with paths over 260 characters still synchronize, but many programs cannot open them. " +
+      "This is a Windows setting that this computer\u2019s administrator controls; DriveCraft does not change it."
+    : "Files with paths over 260 characters synchronize either way. This Windows setting decides whether other programs can open them.";
+  // The one thing in Settings worth pointing at without opening it.
+  $("app-settings-dot").hidden = !off;
 }
 
 // Which network connection DriveCraft sends through, and the menu to change it.
@@ -285,23 +285,89 @@ function dotClass(c) {
   return "";
 }
 
+// Pick a library. The panel sweeps in sideways, blurred as fast things are, and
+// settles within four tenths of a second.
+let motionFrame = null;
+function pick(name) {
+  if (name === selected) return;
+  selected = name;
+  closePops();
+  renderList();
+  renderDetail();
+  sweepIn();
+}
+function sweepIn() {
+  const panel = $("conn");
+  const amount = $("motion-amount");
+  cancelAnimationFrame(motionFrame);
+  if (panel.hidden || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    panel.style.filter = panel.style.transform = panel.style.opacity = "";
+    return;
+  }
+  const start = performance.now();
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / 400);
+    const left = Math.pow(1 - t, 3); // fast at first, easing to rest
+    if (t >= 1) {
+      // Leave nothing behind: a filter would change how the panel's menus stack.
+      panel.style.filter = panel.style.transform = panel.style.opacity = "";
+      amount.setAttribute("stdDeviation", "0 0");
+      return;
+    }
+    amount.setAttribute("stdDeviation", `${(22 * left).toFixed(2)} 0`);
+    panel.style.filter = "url(#motion)";
+    panel.style.transform = `translateX(${(46 * left).toFixed(1)}px)`;
+    panel.style.opacity = String(0.55 + 0.45 * t);
+    motionFrame = requestAnimationFrame(step);
+  };
+  motionFrame = requestAnimationFrame(step);
+}
+
+// With many libraries the list scrolls, and a box above it narrows it down.
+const MANY_LIBRARIES = 8;
 function renderList() {
+  const many = state.connections.length > MANY_LIBRARIES;
+  $("conn-find-wrap").hidden = !many;
+  const words = many ? $("conn-find").value.toLowerCase().split(/\s+/).filter(Boolean) : [];
+  const shown = state.connections.filter((c) => {
+    const hay = `${c.name} ${c.mode} ${decoded(c.library_url)}`.toLowerCase();
+    return words.every((w) => hay.includes(w));
+  });
+  $("conn-none").hidden = shown.length > 0 || state.connections.length === 0;
   $("conn-list").replaceChildren(
-    ...state.connections.map((c) =>
-      el(
+    ...shown.map((c) => {
+      const t = tally(c);
+      const state_ = isBusy(c) ? "synchronizing" : t.bad ? `${t.bad} failing` : t.warn ? `${t.warn} to look at` : "";
+      return el(
         "button",
         {
           class: "conn-item",
           "aria-current": String(c.name === selected),
-          onclick: () => { selected = c.name; closePops(); renderList(); renderDetail(); },
+          title: `${c.name} \u00b7 ${MODES[c.mode].summary}${state_ ? ` \u00b7 ${state_}` : ""}`,
+          onclick: () => pick(c.name),
         },
         el("span", { class: `dot ${dotClass(c)}`, "aria-hidden": "true" }),
         el("span", { class: "title", text: c.name }),
-        el("span", { class: `badge ${c.mode}`, text: c.mode })
-      )
-    )
+        // In a long list the mode is a letter, so the name gets the room.
+        el("span", { class: `badge ${c.mode}`, text: many ? c.mode[0].toUpperCase() : c.mode })
+      );
+    })
   );
+  $("conn-list").classList.toggle("many", many);
+  const current_ = $("conn-list").querySelector("[aria-current=true]");
+  if (current_ && listJumped !== selected) {
+    listJumped = selected;
+    current_.scrollIntoView({ block: "nearest" });
+  }
 }
+let listJumped = null;
+$("conn-find").addEventListener("input", renderList);
+$("conn-find").addEventListener("keydown", (ev) => {
+  // Enter opens the first match, so a library is two keystrokes away.
+  if (ev.key !== "Enter") return;
+  const first = $("conn-list").querySelector(".conn-item");
+  if (first) first.click();
+});
 
 function renderDetail() {
   const c = current();
@@ -534,6 +600,11 @@ function closePops(except) {
     $(pop).hidden = true;
     $(button).setAttribute("aria-expanded", "false");
   }
+  showScrim();
+}
+// The library settings panel gets the window behind it dimmed and blurred, like a dialog.
+function showScrim() {
+  $("scrim").hidden = $("settings-pop").hidden;
 }
 for (const [button, pop] of POPS) {
   $(button).addEventListener("click", (ev) => {
@@ -541,6 +612,7 @@ for (const [button, pop] of POPS) {
     closePops(pop);
     $(pop).hidden = !$(pop).hidden;
     $(button).setAttribute("aria-expanded", String(!$(pop).hidden));
+    showScrim();
   });
   $(pop).addEventListener("click", (ev) => ev.stopPropagation());
 }
@@ -580,7 +652,18 @@ $("auto-sync").addEventListener("change", async (ev) => {
   await refresh();
 });
 
-$("open-logs").addEventListener("click", () => invoke("open_logs").catch(toast));
+// Settings: a dialog, so a problem is shown inside it rather than behind it.
+function settingsError(e) {
+  $("app-settings-error").textContent = e ? String(e) : "";
+  $("app-settings-error").hidden = !e;
+}
+$("app-settings-open").addEventListener("click", () => {
+  closePops();
+  settingsError(null);
+  $("app-settings-dialog").showModal();
+});
+$("app-settings-close").addEventListener("click", () => $("app-settings-dialog").close());
+$("open-logs").addEventListener("click", () => invoke("open_logs").then(() => settingsError(null), settingsError));
 $("conn-library").addEventListener("click", () => invoke("open_connection", { name: selected, target: "library" }).catch(toast));
 for (const id of ["conn-open", "conn-open-tile"]) {
   $(id).addEventListener("click", () => invoke("open_connection", { name: selected, target: "folder" }).catch(toast));
@@ -672,11 +755,158 @@ async function setExplorer(enabled, icon) {
 }
 $("explorer-on").addEventListener("change", (ev) => setExplorer(ev.target.checked));
 $("explorer-apply").addEventListener("click", () => setExplorer(true));
+// The icon picker. The icons are Font Awesome Free's solid set, packed into the app;
+// they are read the first time the picker opens. Whichever is chosen is drawn here
+// at the sizes Windows asks for and handed to the core as an icon file.
+const ICON_COLORS = [["blue", "#1f6fd6"], ["amber", "#d98a1f"], ["green", "#2e9e5b"], ["red", "#d0453a"], ["purple", "#7a56d6"], ["teal", "#178f9c"], ["slate", "#51606f"]];
+// Shown first, before anything is searched for: what a library is most often about.
+const ICON_FIRST = ["folder", "folder-open", "folder-tree", "briefcase", "building", "city", "landmark", "users", "people-group", "user-tie",
+  "file-lines", "file-contract", "file-invoice-dollar", "file-signature", "book", "book-open", "box-archive", "boxes-stacked", "clipboard-list", "list-check",
+  "chart-line", "chart-pie", "coins", "sack-dollar", "scale-balanced", "gavel", "shield-halved", "lock", "key", "handshake",
+  "gear", "screwdriver-wrench", "helmet-safety", "industry", "truck", "ship", "plane", "house", "hospital", "graduation-cap",
+  "flask", "leaf", "bolt", "globe", "map-location-dot", "camera", "image", "film", "palette", "code",
+  "laptop", "server", "database", "cloud", "envelope", "phone", "comments", "bullhorn", "cart-shopping", "store",
+  "star", "flag", "heart", "lightbulb", "rocket", "bullseye", "trophy", "calendar-days", "clock", "bell"];
+let iconNames = null;
+let iconPicked = null;
+let iconColor = ICON_COLORS[0];
+function loadIcons() {
+  if (window.DC_FA) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = el("script", { src: "fa-solid.js" });
+    s.onload = resolve;
+    s.onerror = () => reject("The icons could not be read.");
+    document.head.append(s);
+  });
+}
+function iconSvg(name) {
+  const [w, h, shape] = window.DC_FA.icons[name];
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", shape);
+  path.setAttribute("fill", "currentColor");
+  svg.append(path);
+  return svg;
+}
+function renderIcons() {
+  const all = window.DC_FA.icons;
+  if (!iconNames) {
+    const first = ICON_FIRST.filter((n) => all[n]);
+    iconNames = [...first, ...Object.keys(all).filter((n) => !first.includes(n))];
+  }
+  const words = $("icon-find").value.toLowerCase().split(/\s+/).filter(Boolean);
+  const found = words.length
+    ? iconNames.filter((n) => { const hay = `${n.replace(/-/g, " ")} ${all[n][3]}`; return words.every((w) => hay.includes(w)); })
+    : iconNames;
+  // A name that matches comes before one that only matches by a related word.
+  if (words.length) found.sort((a, b) => Number(!words.every((w) => a.includes(w))) - Number(!words.every((w) => b.includes(w))));
+  const shown = found.slice(0, 420);
+  const grid = $("icon-grid");
+  grid.style.color = iconColor[1];
+  grid.replaceChildren(...shown.map((n) => {
+    const b = el("button", { type: "button", role: "option", title: n.replace(/-/g, " "), "aria-selected": String(n === iconPicked), "data-icon": n });
+    b.append(iconSvg(n));
+    return b;
+  }));
+  $("icon-status").textContent = found.length === 0 ? "No icon matches. Try another word."
+    : iconPicked ? `Chosen: ${iconPicked.replace(/-/g, " ")}`
+    : `${found.length.toLocaleString()} icons` + (found.length > shown.length ? `, showing the first ${shown.length}. Search to narrow them.` : "");
+  $("icon-use").disabled = !iconPicked;
+}
+$("icon-grid").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button[data-icon]");
+  if (!b) return;
+  iconPicked = b.dataset.icon;
+  for (const x of $("icon-grid").children) x.setAttribute("aria-selected", String(x === b));
+  $("icon-status").textContent = `Chosen: ${iconPicked.replace(/-/g, " ")}`;
+  $("icon-use").disabled = false;
+});
+$("icon-grid").addEventListener("dblclick", (ev) => { if (ev.target.closest("button[data-icon]")) $("icon-use").click(); });
+$("icon-find").addEventListener("input", renderIcons);
+$("icon-colors").replaceChildren(...ICON_COLORS.map((c) => {
+  const b = el("button", { type: "button", role: "radio", title: c[0], "aria-label": c[0], "aria-checked": String(c === iconColor), style: `background:${c[1]}` });
+  b.addEventListener("click", () => {
+    iconColor = c;
+    for (const x of $("icon-colors").children) x.setAttribute("aria-checked", String(x === b));
+    $("icon-grid").style.color = c[1];
+  });
+  return b;
+}));
+// An icon file holding the picture at each size Windows uses, drawn in the colour chosen.
+async function drawIcon(name, color) {
+  const [w, h, shape] = window.DC_FA.icons[name];
+  const path = new Path2D(shape);
+  const images = [];
+  for (const size of [16, 20, 24, 32, 40, 48, 64, 256]) {
+    const canvas = el("canvas", { width: size, height: size });
+    const ctx = canvas.getContext("2d");
+    const room = size * (size <= 24 ? 1 : 0.9);
+    const scale = room / Math.max(w, h);
+    ctx.translate((size - w * scale) / 2, (size - h * scale) / 2);
+    ctx.scale(scale, scale);
+    ctx.fillStyle = color;
+    ctx.fill(path);
+    const blob = await new Promise((r) => canvas.toBlob(r, "image/png"));
+    images.push([size, new Uint8Array(await blob.arrayBuffer())]);
+  }
+  const head = 6 + 16 * images.length;
+  const file = new Uint8Array(head + images.reduce((n, i) => n + i[1].length, 0));
+  const view = new DataView(file.buffer);
+  view.setUint16(2, 1, true);
+  view.setUint16(4, images.length, true);
+  let at = head;
+  images.forEach(([size, png], i) => {
+    const e = 6 + 16 * i;
+    file[e] = file[e + 1] = size >= 256 ? 0 : size;
+    view.setUint16(e + 4, 1, true);
+    view.setUint16(e + 6, 32, true);
+    view.setUint32(e + 8, png.length, true);
+    view.setUint32(e + 12, at, true);
+    file.set(png, at);
+    at += png.length;
+  });
+  return file;
+}
+function iconError(e) {
+  $("icon-error").textContent = e ? String(e) : "";
+  $("icon-error").hidden = !e;
+}
 $("explorer-icon").addEventListener("click", async () => {
+  closePops();
+  iconPicked = null;
+  iconError(null);
+  $("icon-find").value = "";
+  $("icon-grid").replaceChildren();
+  $("icon-status").textContent = "Reading the icons\u2026";
+  $("icon-dialog").showModal();
+  $("icon-find").focus();
   try {
-    const picked = await invoke("pick_icon");
-    if (picked) await setExplorer(true, picked);
-  } catch (e) { toast(e); }
+    await loadIcons();
+    renderIcons();
+  } catch (e) {
+    $("icon-status").textContent = "";
+    iconError(e);
+  }
+});
+$("icon-cancel").addEventListener("click", () => $("icon-dialog").close());
+$("icon-default").addEventListener("click", async () => {
+  $("icon-dialog").close();
+  await setExplorer(true, "default");
+});
+$("icon-use").addEventListener("click", async () => {
+  if (!iconPicked) return;
+  $("icon-use").disabled = true;
+  try {
+    const data = await drawIcon(iconPicked, iconColor[1]);
+    const file = await invoke("save_icon", { key: `${iconPicked}-${iconColor[0]}`, data: Array.from(data) });
+    $("icon-dialog").close();
+    await setExplorer(true, `${file},0`);
+  } catch (e) {
+    iconError(e);
+    $("icon-use").disabled = false;
+  }
 });
 
 // A file's library details: its values in the columns the library defines.
@@ -1249,11 +1479,10 @@ $("syncbtn").addEventListener("change", async (ev) => {
     if (!ok) { ev.target.checked = false; return; }
   }
   try {
-    const now = await invoke("set_sync_button", { enabled: on });
-    toast(now.ours
-      ? "Sync in your browser now opens DriveCraft."
-      : `The Sync button is back as it was${now.other ? `: it opens ${now.other}` : ""}.`, true);
-  } catch (e) { toast(e); }
+    await invoke("set_sync_button", { enabled: on });
+    settingsError(null);
+  } catch (e) { settingsError(e); }
+  // The line under the switch says who has the button now.
   await refresh();
 });
 async function handleSyncLink() {
