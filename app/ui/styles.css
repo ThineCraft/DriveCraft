@@ -436,6 +436,8 @@ select.on { border-color: var(--blue); color: var(--blue-soft-ink); font-weight:
 .brand-link { font: inherit; color: inherit; letter-spacing: inherit; border-radius: 6px; padding: 0 .1rem; margin: 0 -.1rem; }
 .brand-link:hover { text-decoration: underline; text-underline-offset: 3px; }
 .progress { margin-top: 1.1rem; padding: .95rem 1.1rem; border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--line)); border-radius: var(--radius); background: color-mix(in srgb, var(--blue) 7%, var(--bed-2)); }
+.progress.stuck { border-color: var(--warn-line); background: var(--warn-bg); }
+.progress.stuck .progress-left .ic, .progress.stuck #progress-until { color: var(--amber-ink); }
 .progress-top { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .progress-left { display: inline-flex; align-items: center; gap: .6rem; font-size: 1.35rem; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 .progress-left .ic { color: var(--blue); }

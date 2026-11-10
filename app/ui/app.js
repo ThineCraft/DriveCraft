@@ -513,9 +513,21 @@ function renderProgress() {
     Object.assign(e, { left: p.seconds_left, at: now, pauseUntil: 0 });
     left = e.left;
   }
+  $("progress").classList.toggle("stuck", left > 365 * 86400);
+  if (left > 365 * 86400) {
+    // No run should take a year. The pace has collapsed, and waiting will not help.
+    return say("Estimated more than a year left", "Something is wrong. Ask your administrator for help.");
+  }
   const end = new Date(now + left * 1000);
   const days = Math.floor((new Date(end).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000);
-  const day = days === 0 ? "" : days === 1 ? " tomorrow" : ` on ${end.toLocaleDateString([], { weekday: "long" })}`;
+  // The further off, the more of the date is needed to place it.
+  const weekday = end.toLocaleDateString([], { weekday: "long" });
+  const n = end.getDate();
+  const nth = `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th"}`;
+  const day = days === 0 ? "" : days === 1 ? " tomorrow"
+    : days < 7 ? ` on ${weekday}`
+    : days <= 31 ? ` on ${weekday} the ${nth}`
+    : ` on ${weekday} ${nth}, ${end.toLocaleDateString([], { month: "long" })}`;
   say(`Estimated ${spanWords(left)} left`, `Estimated to finish around ${end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}${day}`);
 }
 setInterval(() => { if (state && !$("view-main").hidden) renderProgress(); }, 1000);
