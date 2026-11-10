@@ -287,18 +287,21 @@ function dotClass(c) {
   return "";
 }
 
-// Pick a library. The panel sweeps in sideways, blurred as fast things are, and
-// settles within four tenths of a second.
+// Pick a library. The panel sweeps in vertically, blurred as fast things are, and
+// settles within half a second. It comes from below when the library is further
+// down the list, and from above when it is further up.
 let motionFrame = null;
 function pick(name) {
   if (name === selected) return;
+  const order = state.connections.map((c) => c.name);
+  const from = order.indexOf(name) < order.indexOf(selected) ? -1 : 1;
   selected = name;
   closePops();
   renderList();
   renderDetail();
-  sweepIn();
+  sweepIn(from);
 }
-function sweepIn() {
+function sweepIn(from = 1) {
   const panel = $("conn");
   const amount = $("motion-amount");
   cancelAnimationFrame(motionFrame);
@@ -308,7 +311,7 @@ function sweepIn() {
   }
   const start = performance.now();
   const step = (now) => {
-    const t = Math.min(1, (now - start) / 400);
+    const t = Math.min(1, (now - start) / 500);
     const left = Math.pow(1 - t, 3); // fast at first, easing to rest
     if (t >= 1) {
       // Leave nothing behind: a filter would change how the panel's menus stack.
@@ -316,9 +319,9 @@ function sweepIn() {
       amount.setAttribute("stdDeviation", "0 0");
       return;
     }
-    amount.setAttribute("stdDeviation", `${(22 * left).toFixed(2)} 0`);
+    amount.setAttribute("stdDeviation", `0 ${(22 * left).toFixed(2)}`);
     panel.style.filter = "url(#motion)";
-    panel.style.transform = `translateX(${(46 * left).toFixed(1)}px)`;
+    panel.style.transform = `translateY(${(from * 46 * left).toFixed(1)}px)`;
     panel.style.opacity = String(0.55 + 0.45 * t);
     motionFrame = requestAnimationFrame(step);
   };
