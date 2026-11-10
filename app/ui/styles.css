@@ -460,8 +460,9 @@ select.on { border-color: var(--blue); color: var(--blue-soft-ink); font-weight:
 .progress { margin-top: 1.1rem; padding: .95rem 1.1rem; border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--line)); border-radius: var(--radius); background: color-mix(in srgb, var(--blue) 7%, var(--bed-2)); }
 .progress.stuck { border-color: var(--warn-line); background: var(--warn-bg); }
 .progress.stuck .progress-left .ic, .progress.stuck #progress-until { color: var(--amber-ink); }
-.progress { position: relative; overflow: hidden; }
-.progress > :not(.progress-graph) { position: relative; }
+/* It keeps its height when the page is full; the activity list below gives way instead. */
+.progress { position: relative; overflow: hidden; flex: none; }
+.progress > :not(svg) { position: relative; }
 .progress-graph { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
   /* Graph paper: fine lines, and a slightly firmer one every fifth. */
   background-image:
@@ -473,6 +474,13 @@ select.on { border-color: var(--blue); color: var(--blue-soft-ink); font-weight:
   background-position: right bottom; }
 #progress-graph-area { fill: color-mix(in srgb, var(--blue) 10%, transparent); stroke: none; }
 #progress-graph-line { fill: none; stroke: color-mix(in srgb, var(--blue) 38%, transparent); stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.progress-bar { display: none; }
+/* How far along the run is, drawn as the panel's own edge: it starts at the top
+   right and runs anticlockwise until it has gone all the way round. */
+.progress-edge { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.progress-edge rect { x: 1.25px; y: 1.25px; width: calc(100% - 2.5px); height: calc(100% - 2.5px); fill: none; stroke: var(--blue); stroke-width: 2.5; stroke-linecap: round; transform-box: fill-box; transform-origin: center; transform: scaleX(-1); transition: stroke-dasharray .8s linear; }
+.progress.stuck .progress-edge rect { stroke: var(--amber-ink); }
+.progress-top { margin-bottom: .7rem; }
 .progress-top { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .progress-left { display: inline-flex; align-items: center; gap: .6rem; font-size: 1.35rem; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 .progress-left .ic { color: var(--blue); }

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DriveCraft · ThineCraft</title>
-  <meta name="description" content="A planned hybrid OneDrive alternative spanning desktop synchronization, managed metadata, migration, and organization-controlled offline copies.">
+  <meta name="description" content="DriveCraft is an open-source sync client for SharePoint and OneDrive for work: two-way sync, download-only archives and one-way uploads, built for very large libraries. A working prototype for Windows.">
   <link rel="canonical" href="https://drive.thinecraft.io/">
   <link rel="stylesheet" href="/styles.css">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -18,64 +18,92 @@
     <nav id="project-navigation" class="project-nav" aria-label="ThineCraft projects" data-open="false"><a href="https://thinecraft.io">ThineCraft</a><a href="https://share.thinecraft.io">ShareCraft</a><a href="https://drive.thinecraft.io" aria-current="page">DriveCraft</a><a href="https://team.thinecraft.io">TeamCraft</a><a href="https://gantt.thinecraft.io">GanttCraft</a><a href="https://flow.thinecraft.io">FlowCraft</a><a href="https://show.thinecraft.io">ShowCraft</a><a href="https://form.thinecraft.io">FormCraft</a></nav>
   </header>
   <main id="main">
-    <section class="hero">
+    <section class="hero hero-with-shot">
       <div class="hero-copy">
-        <p class="eyebrow">Sync, migration, and continuity</p>
+        <p class="eyebrow">Open-source sync for SharePoint and OneDrive for work</p>
         <h1>Keep every file in reach—and under your control.</h1>
-        <p class="lede">A planned hybrid OneDrive alternative spanning desktop synchronization, managed metadata, migration, and organization-controlled offline copies.</p>
+        <p class="lede">DriveCraft keeps SharePoint document libraries and OneDrive for work in step with folders on your computer. It is built for libraries far larger than the usual clients are comfortable with, and it tells you plainly what it is doing.</p>
         <aside class="status" aria-label="Project status">
-          <strong>Placeholder project</strong>
-          <span>No working implementation is provided or implied.</span>
+          <strong>Working prototype for Windows</strong>
+          <span>Everything shown on this page runs today. Try it on a test library first: it is not finished, and the installer is not yet code-signed.</span>
         </aside>
+        <p class="cta-row"><a class="button" href="https://github.com/ThineCraft/DriveCraft">Get the source <span aria-hidden="true">↗</span></a><a class="button quiet" href="#today">See what works</a></p>
       </div>
-      <div class="signal" aria-hidden="true">
-    <div class="signal-orbit signal-orbit-one"></div>
-    <div class="signal-orbit signal-orbit-two"></div>
-    <div class="signal-core"><span>D</span></div>
-    <span class="signal-label signal-label-1">SYNC</span><span class="signal-label signal-label-2">100K+</span><span class="signal-label signal-label-3">OFFLINE</span>
-  </div>
+      <figure class="hero-shot">
+        <img src="/screens/running.png" width="2168" height="1530" alt="The DriveCraft window during a large download: a two-way library called Northwind, an estimate of 3 hours and 14 minutes with the speed of the last hour drawn behind it, and notes that three problems need attention and two files are checked out.">
+      </figure>
     </section>
     <section class="thesis-section section-shell" aria-labelledby="thesis-title">
       <p class="section-kicker">The proposition</p>
       <h2 id="thesis-title">Built to remain understandable—and yours.</h2>
-      <p>DriveCraft is intended to join everyday synchronization with an organization-wide continuity layer, so cloud files remain visible, movable, and recoverable on infrastructure the organization controls.</p>
+      <p>Most people still use SharePoint like a shared drive. DriveCraft meets them there: files stay whole on disk, every change is previewed and logged, and anything it alters on your computer can be put back with one switch.</p>
     </section>
-    <section class="capabilities section-shell" aria-labelledby="capabilities-title">
+    <section class="capabilities section-shell" id="today" aria-labelledby="capabilities-title">
       <div class="section-heading">
-        <p class="section-kicker">Proposed scope</p>
-        <h2 id="capabilities-title">What DriveCraft is intended to make possible.</h2>
+        <p class="section-kicker">Working today</p>
+        <h2 id="capabilities-title">What DriveCraft already does.</h2>
       </div>
       <div class="feature-grid"><article class="feature-card">
     <span class="feature-index">01</span>
-    <p class="feature-label">Planned capability</p>
-    <h3>One client across operating systems</h3>
-    <p>Desktop synchronization is planned for Zorin OS and other Linux environments, Windows, and macOS, with a consistent view of files, managed metadata, versions, and sync state.</p>
+    <p class="feature-label">Three ways to connect</p>
+    <h3>Sync, Archive, or Ingest</h3>
+    <p>Two-way sync for everyday work. Archive for a complete download-only copy that never changes the library. Ingest to move a folder or file server into a library without touching the source.</p>
   </article><article class="feature-card">
     <span class="feature-index">02</span>
-    <p class="feature-label">Planned capability</p>
-    <h3>ShareCraft and Microsoft Graph</h3>
-    <p>Native ShareCraft connectivity and Microsoft Graph integration are intended to support SharePoint and OneDrive discovery, migration, backup, and controlled synchronization.</p>
+    <p class="feature-label">Large libraries</p>
+    <h3>No file-count ceiling</h3>
+    <p>A catalog on your computer tracks every file, so there is no fixed limit to hit. DriveCraft paces itself to what the server will accept instead of being thrown back. Testing with a 200,000-file library is in progress.</p>
   </article><article class="feature-card">
     <span class="feature-index">03</span>
-    <p class="feature-label">Planned capability</p>
-    <h3>A complete offline copy</h3>
-    <p>A server, NAS, or private host can be planned as an offline copy of the files an organization uses, with local PostgreSQL tracking for more than 100,000 files.</p>
+    <p class="feature-label">Nothing by surprise</p>
+    <h3>Preview, then act</h3>
+    <p>Preview any run before it happens. Large deletions wait for your confirmation. A file changed in both places is never overwritten: your version is kept beside the library’s.</p>
   </article></div>
+
+      <div class="shots">
+      <figure class="shot">
+        <img src="/screens/recycle-bin.png" width="2168" height="1530" alt="The recycle bin view, searched for the word budget and limited to the last 7 days, showing ten matches with two ticked and a button to restore 2 items." loading="lazy">
+        <figcaption><h3>Find a deleted file in seconds</h3><p>Search the library’s recycle bin by any part of the name, the folder, or who deleted it. Filter by date, person and kind of file, then restore one item or several.</p></figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="/screens/problems.png" width="2168" height="1530" alt="The problems view for a library, grouped into files that could not be transferred, a version kept as a copy, a file that was not uploaded, and a long path notice." loading="lazy">
+        <figcaption><h3>Problems you can act on</h3><p>Every file that could not be synchronized is listed with the reason and what to do. A problem clears itself once it is fixed; nothing is hidden in a log.</p></figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="/screens/details.png" width="2168" height="1530" alt="The file details panel for Budget model.xlsx, with fields for title, department, approval status, regions, review date and page count." loading="lazy">
+        <figcaption><h3>Library details, where you work</h3><p>See and change a file’s library columns, the metadata most people never use because it lives only in the SharePoint web pages, straight from a right-click.</p></figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="/screens/sync-button.png" width="2168" height="1530" alt="The Connect a library form opened from the browser, already filled in for the Documents library of a Finance Team site, with a button to use OneDrive for this one instead." loading="lazy">
+        <figcaption><h3>Take over the Sync button, reversibly</h3><p>Pressing Sync in the browser can open DriveCraft with the form filled in. Nothing connects until you say so, and one switch hands the button back to OneDrive exactly as it was.</p></figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="/screens/icons.png" width="2168" height="1530" alt="The icon picker, showing a grid of amber icons with a balance-scale icon chosen." loading="lazy">
+        <figcaption><h3>At home in File Explorer</h3><p>Status icons beside every file, Check out and Check in on right-click, and a name and icon of your choosing for each library’s folder, from 1,421 bundled icons.</p></figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="/screens/library-light.png" width="2168" height="1530" alt="The DriveCraft window in its light theme, showing a download-only archive library." loading="lazy">
+        <figcaption><h3>Light, dark, or follow the system</h3><p>One calm window that lives in the system tray. With many libraries the list becomes searchable, and a run shows an estimate instead of a guess.</p></figcaption>
+      </figure>
+      </div>
     </section>
     <section class="sequence-section section-shell" aria-labelledby="sequence-title">
       <div>
-        <p class="section-kicker">The shape of the work</p>
-        <h2 id="sequence-title">A simple path through a complex system.</h2>
+        <p class="section-kicker">Still ahead</p>
+        <h2 id="sequence-title">What is not built yet.</h2>
       </div>
       <ol><li>
     <span>01</span>
-    <strong>Discover files and metadata</strong>
+    <strong>ShareCraft connectivity, beside Microsoft 365</strong>
   </li><li>
     <span>02</span>
-    <strong>Move or synchronize safely</strong>
+    <strong>Linux, including Zorin OS, and macOS</strong>
   </li><li>
     <span>03</span>
-    <strong>Maintain an independent copy</strong>
+    <strong>Choosing folders, and files on demand</strong>
+  </li><li>
+    <span>04</span>
+    <strong>A code-signed installer and sign-in with the Windows login</strong>
   </li></ol>
     </section>
     <section class="ecosystem section-shell" aria-labelledby="ecosystem-title">
@@ -108,10 +136,10 @@
     <section class="source-cta section-shell">
       <p class="section-kicker">Open from the beginning</p>
       <h2>The source and the conversation belong in public.</h2>
-      <p>This site documents an intended direction. Follow the repository as the project definition, architecture, and implementation take shape.</p>
+      <p>DriveCraft is written in Rust and developed in the open. The repository holds the code, the scope, and a guide to setting it up; installers are built by GitHub from that source.</p>
       <a href="https://github.com/ThineCraft/DriveCraft">View on GitHub <span aria-hidden="true">↗</span></a>
     </section>
   </main>
-  <footer><span>DriveCraft</span><span>Part of the planned ThineCraft ecosystem.</span></footer>
+  <footer><span>DriveCraft</span><span>Part of the ThineCraft ecosystem. Icons in the app by Font Awesome Free (CC BY 4.0).</span></footer>
 </body>
 </html>

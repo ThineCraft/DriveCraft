@@ -154,7 +154,7 @@ async fn run(cat: &Catalog, graph: &GraphClient<StaticToken>, opts: Options) -> 
 #[tokio::test(flavor = "multi_thread")]
 async fn archive_then_two_way_sync_over_http() {
     let dir = tempfile::tempdir().unwrap();
-    let local = dir.path().join("TTSEC");
+    let local = dir.path().join("Northwind");
     let remote = Arc::new(FakeRemote::new());
     remote.set_page_size(3);
     remote.put("Q1 report #3 100%.txt", b"quarterly");

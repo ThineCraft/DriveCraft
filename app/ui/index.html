@@ -243,11 +243,11 @@
           <svg class="progress-graph" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
             <path id="progress-graph-area" d=""/><path id="progress-graph-line" d=""/>
           </svg>
+          <svg class="progress-edge" aria-hidden="true"><rect id="progress-edge" rx="13" pathLength="100" stroke-dasharray="0 100"/></svg>
           <div class="progress-top">
             <span class="progress-left"><svg class="ic"><use href="#i-clock"/></svg><span id="progress-left"></span></span>
             <span class="muted" id="progress-until"></span>
           </div>
-          <div class="progress-bar" aria-hidden="true"><div id="progress-fill"></div></div>
           <div class="progress-bottom muted small"><span id="progress-count"></span><span id="progress-rate"></span></div>
         </div>
 
@@ -348,7 +348,7 @@
 
       <label>Folder on this computer
         <div class="with-button">
-          <input id="add-folder" required spellcheck="false" autocomplete="off" placeholder="C:\Work\TTSEC">
+          <input id="add-folder" required spellcheck="false" autocomplete="off" placeholder="C:\Work\Northwind">
           <button type="button" class="btn quiet" id="add-browse">Browse…</button>
         </div>
         <span class="muted small">The folder's name is yours to choose; it does not have to match the site's title.</span>

@@ -464,13 +464,16 @@ function renderDetail() {
 // between reports the clock here keeps counting down by itself.
 const progressOf = {};
 function spanWords(secs) {
+  // In full words, the two largest units: "4 days and 20 hours".
   const s = Math.max(0, Math.round(secs));
-  if (s < 60) return `${s} s`;
+  const say = (n, unit) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+  const two = (a, aUnit, b, bUnit) => (b === 0 ? say(a, aUnit) : `${say(a, aUnit)} and ${say(b, bUnit)}`);
+  if (s < 60) return say(s, "second");
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m} min ${String(s % 60).padStart(2, "0")} s`;
+  if (m < 60) return two(m, "minute", s % 60, "second");
   const h = Math.floor(m / 60);
-  if (h < 48) return `${h} h ${String(m % 60).padStart(2, "0")} min`;
-  return `${Math.floor(h / 24)} days ${h % 24} h`;
+  if (h < 24) return two(h, "hour", m % 60, "minute");
+  return two(Math.floor(h / 24), "day", h % 24, "hour");
 }
 // The run's speed over the last hour, drawn faintly on graph paper behind the
 // estimate: when the estimate moves, the shape behind it shows why. The right-hand
@@ -518,7 +521,8 @@ function renderProgress() {
   if ($("progress").hidden) return;
   drawSpeed(selected);
   const doing = p.verb === "uploaded" ? "Uploaded" : "Downloaded";
-  $("progress-fill").style.width = `${(100 * (p.total_bytes > 0 ? p.bytes / p.total_bytes : p.done / Math.max(1, p.total))).toFixed(2)}%`;
+  const part = Math.min(1, p.total_bytes > 0 ? p.bytes / p.total_bytes : p.done / Math.max(1, p.total));
+  $("progress-edge").setAttribute("stroke-dasharray", `${(100 * part).toFixed(2)} 100`);
   $("progress-count").textContent =
     `${doing} ${p.done.toLocaleString()} of ${p.total.toLocaleString()} files · ${humanBytes(p.bytes).join(" ")} of ${humanBytes(p.total_bytes).join(" ")}`;
   $("progress-rate").textContent = p.files_per_second > 0
@@ -559,7 +563,7 @@ function renderProgress() {
     : days < 7 ? ` on ${weekday}`
     : days <= 31 ? ` on ${weekday} the ${nth}`
     : ` on ${weekday} ${nth}, ${end.toLocaleDateString([], { month: "long" })}`;
-  say(`Estimated ${spanWords(left)} left`, `Approx. ${end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}${day}`);
+  say(`Estimated ${spanWords(left)}`, `Approx. ${end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}${day}`);
 }
 setInterval(() => { if (state && !$("view-main").hidden) renderProgress(); }, 1000);
 
@@ -621,6 +625,11 @@ function renderLog(c) {
 }
 
 function pushLog(name, text, cls = "") {
+  // A progress line says the same words every time; on screen the numbers are enough.
+  // (The log file keeps the full line.)
+  if (text.startsWith("progress: ")) {
+    text = text.slice(10).replace(/^(uploaded|downloaded) /, "").replace(", about ", ", ").replace(/ files per second, /, " files/s, ").replace(/ per second, /, "/s, ");
+  }
   const list = (logs[name] = logs[name] || []);
   if (!cls) {
     if (text.startsWith("… and ")) cls = "head";

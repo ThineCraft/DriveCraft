@@ -251,12 +251,13 @@ impl Progress {
             "unknown".into()
         };
         Some(format!(
-            "progress: {} {} of {} files ({} of {}), {:.1} files/s, {}/s, {} left",
+            // What is left is said outright, so nobody has to subtract.
+            "progress: {} {} / {} remaining ({} / {} remaining), {:.1} files/s, {}/s, {} left",
             self.verb,
             done,
-            self.total,
+            self.total - done.min(self.total),
             crate::sysinfo::human_bytes(bytes),
-            crate::sysinfo::human_bytes(self.total_bytes),
+            crate::sysinfo::human_bytes(self.total_bytes.saturating_sub(bytes)),
             rate,
             crate::sysinfo::human_bytes((bytes as f64 / secs) as u64),
             left
