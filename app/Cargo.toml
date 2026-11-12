@@ -3,6 +3,7 @@ name = "drivecraft-app"
 version = "0.1.0"
 edition = "2021"
 description = "DriveCraft desktop app"
+license = "MIT"
 publish = false
 
 [[bin]]

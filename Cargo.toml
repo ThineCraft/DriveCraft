@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Open-source synchronization client for SharePoint, OneDrive for work, and ShareCraft"
 repository = "https://github.com/ThineCraft/DriveCraft"
+license = "MIT"
 publish = false
 
 [dependencies]

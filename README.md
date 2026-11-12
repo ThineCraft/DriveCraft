@@ -8,3 +8,7 @@ DriveCraft is the planned open-source OneDrive alternative for Zorin OS and othe
 
 - [Getting started](getting-started.html): build it, register the app, and try it on a test library.
 - [Scope](scope.html): what DriveCraft is meant to become, and what is still undecided.
+
+## Licence
+
+DriveCraft is free and open-source software under the [MIT License](LICENSE).

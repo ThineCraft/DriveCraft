@@ -37,6 +37,7 @@
       "nsis"
     ],
     "publisher": "ThineCraft",
+    "copyright": "Copyright (c) DriveCraft contributors. MIT License.",
     "shortDescription": "Synchronize SharePoint and OneDrive for work",
     "longDescription": "DriveCraft synchronizes SharePoint document libraries and OneDrive for work with folders on this computer.",
     "resources": {
