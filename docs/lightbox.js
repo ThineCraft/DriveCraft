@@ -19,6 +19,35 @@
     };
   });
 
+  // The larger view brings its own styles, so a browser holding an older copy of
+  // the site's stylesheet cannot show the picture at full size with scroll bars.
+  const style = document.createElement('style');
+  style.textContent = `
+    .lightbox { box-sizing: border-box; width: 100vw; max-width: none; height: 100vh; height: 100dvh; max-height: none; margin: 0; padding: clamp(.75rem, 2.5vw, 2rem); border: 0; background: none; color: #f5f1e7; overflow: hidden; }
+    .lightbox[open] { display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 1rem; animation: lightbox-in .2s ease; }
+    .lightbox::backdrop { background: #05080ccc; -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+    .lightbox-stage { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: clamp(.25rem, 1.5vw, 1rem); align-items: center; min-height: 0; cursor: zoom-out; }
+    .lightbox-image { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; margin: auto; border: 1px solid #ffffff24; border-radius: .9rem; box-shadow: 0 2rem 6rem #000c; cursor: zoom-out; object-fit: contain; min-height: 0; }
+    .lightbox-words { display: flex; gap: 1.5rem; align-items: end; justify-content: space-between; width: min(100%, 70rem); margin: 0 auto; }
+    .lightbox-title { margin: 0 0 .3rem; font-size: clamp(1.05rem, 2vw, 1.4rem); letter-spacing: -.02em; }
+    .lightbox-caption { max-width: 52rem; margin: 0; color: #c9c5bb; font-size: .95rem; line-height: 1.5; }
+    .lightbox-count { margin: 0; color: #aaa79f; font-family: ui-monospace, monospace; font-size: .8rem; white-space: nowrap; }
+    .lightbox button { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; padding: 0 0 .15rem; border: 1px solid #ffffff2e; border-radius: 50%; background: #0d131ae6; color: #f5f1e7; font: inherit; font-size: 1.6rem; line-height: 1; cursor: pointer; }
+    .lightbox button:hover, .lightbox button:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+    .lightbox-close { position: absolute; top: clamp(.75rem, 2vw, 1.5rem); right: clamp(.75rem, 2vw, 1.5rem); z-index: 1; }
+    @keyframes lightbox-in { from { opacity: 0; transform: scale(.985); } }
+    @media (max-width: 46rem) {
+      .lightbox-stage { grid-template-columns: minmax(0, 1fr); }
+      .lightbox-step { position: absolute; bottom: clamp(.75rem, 2.5vw, 2rem); z-index: 1; }
+      .lightbox-previous { right: 4.25rem; }
+      .lightbox-next { right: clamp(.75rem, 2.5vw, 2rem); }
+      .lightbox-words { display: block; padding-right: 7.5rem; }
+      .lightbox-caption { font-size: .85rem; }
+      .lightbox-count { margin-top: .4rem; }
+    }
+  `;
+  document.head.append(style);
+
   const make = (tag, props = {}, ...children) => {
     const node = Object.assign(document.createElement(tag), props);
     node.append(...children);
