@@ -31,6 +31,8 @@
       <symbol id="i-checklist" viewBox="0 0 24 24"><path d="m4 7 1.5 1.5L8 6M4 13l1.5 1.5L8 12M11 7h9M11 13h9M4 19h16"/></symbol>
       <symbol id="i-network" viewBox="0 0 24 24"><path d="M9 4h6v5H9zM3 15h6v5H3zM15 15h6v5h-6zM12 9v3M6 15v-3h12v3"/></symbol>
       <symbol id="i-lock" viewBox="0 0 24 24"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3M12 14.5v2"/></symbol>
+      <symbol id="i-people" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 19.5c.6-3.3 3-5.3 6-5.3s5.4 2 6 5.3M15.5 5.2a3 3 0 0 1 0 5.6M17.5 14.6c1.7.7 3 2.4 3.4 4.9"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5"/></symbol>
       <symbol id="i-bin" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></symbol>
       <symbol id="i-details" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h6M9 16h6"/></symbol>
       <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></symbol>
@@ -290,6 +292,7 @@
             <button class="textlink" id="conn-open"><svg class="ic"><use href="#i-folder-open"/></svg>Open local folder</button>
             <button class="textlink" id="details-open" title="See and change the library's details for a file"><svg class="ic"><use href="#i-details"/></svg>File details</button>
             <button class="textlink" id="bin-open" title="See what was deleted from this library, and put it back"><svg class="ic"><use href="#i-bin"/></svg>Recycle bin</button>
+            <button class="textlink" id="perms-open" title="See who may open what in this library"><svg class="ic"><use href="#i-people"/></svg>Permissions</button>
           </span>
           <span class="protect"><svg class="ic"><use href="#i-shield"/></svg><span id="foot-protect"></span></span>
         </div>
@@ -492,6 +495,45 @@
         <button type="button" class="btn quiet" id="bin-sync" hidden>Sync now</button>
         <button type="button" class="btn amber" id="bin-restore" hidden></button>
         <button type="button" class="btn primary" id="bin-close">Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Who may open what in the library. Read-only. -->
+  <dialog id="perms-dialog">
+    <div class="dialog-body">
+      <h2 id="perms-title"></h2>
+      <p class="muted small">Everything in the library takes the library’s own permissions, except the folders and files listed under it, which have permissions of their own and pass them on to what is inside them. Nothing can be changed here.</p>
+      <input id="perms-filter" type="search" autocomplete="off" spellcheck="false" autofocus
+             placeholder="Type a folder or file name, or a person or group: Alex Morgan, HR…">
+      <div class="bin-tools">
+        <select id="perms-kind" aria-label="Who">
+          <option value="">Anyone</option>
+          <option value="user">People</option>
+          <option value="group">Groups</option>
+          <option value="site_group">SharePoint groups</option>
+          <option value="link">Sharing links</option>
+          <option value="other">Others</option>
+        </select>
+        <select id="perms-role" aria-label="What they may do">
+          <option value="">Any access</option>
+          <option value="owner">Full control</option>
+          <option value="write">Can edit</option>
+          <option value="read">Can view</option>
+        </select>
+        <button type="button" class="textlink small" id="perms-clear" hidden>Clear filters</button>
+      </div>
+      <p class="muted small" id="perms-status" role="status" aria-live="polite"></p>
+      <div class="banner perms-banner" id="perms-partial" hidden>
+        <p class="small">You are not an owner of this library, so the library showed you only the permissions that apply to you. Other people may have access that is not listed here. An owner of the library sees the full lists.</p>
+      </div>
+      <div class="problems" id="perms-list"></div>
+      <p class="muted small" id="perms-groups-note" hidden>A person may also reach folders through SharePoint groups and other groups they belong to; SharePoint does not tell DriveCraft who is in its groups, so those are shown by the group’s name only.</p>
+      <p class="error" id="perms-error" hidden></p>
+      <div class="actions">
+        <span class="muted small bin-note" id="perms-when"></span>
+        <button type="button" class="btn quiet" id="perms-reload" title="Read the permissions from the library again">Refresh</button>
+        <button type="button" class="btn primary" id="perms-close">Close</button>
       </div>
     </div>
   </dialog>

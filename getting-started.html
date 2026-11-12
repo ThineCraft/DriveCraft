@@ -26,7 +26,9 @@
         <li>Warns about long paths and about names SharePoint rejects.</li>
         <li>Keeps both versions when a file changed in both places, and holds back large deletions until you confirm them.</li>
         <li>Checks a file out and in from the command line.</li>
-        <li>Publishes a seed: a snapshot of a library's file list, stored in the library, that lets another computer skip the first full scan.</li>
+        <li>Publishes a seed: a snapshot of a library's file list, stored in the library, that lets another computer skip the first full scan. Made by an owner of the library, it also lists who may open each restricted folder; each computer then removes from its own list what its user may not open.</li>
+        <li>Skips files the signed-in user may not open, without reporting them as failures.</li>
+        <li>Shows a library's permission structure: the library's own permissions and every folder or file with permissions of its own, with who has what. Read-only.</li>
         <li>A desktop app with a tray icon over the same core: sign in, connect a library, choose the mode, preview and run a sync, and see activity, conflicts and warnings.</li>
       </ul>
       <h3>Not built yet</h3>
@@ -124,8 +126,31 @@ drivecraft sync Migration</code></pre>
         <li>Any computer that later connects to that library looks for a seed on its first synchronization. If it finds one, it loads it and asks the server only for what changed since. Nothing has to be copied between computers by hand.</li>
         <li>A seed is a starting point only. It holds names, sizes and identifiers, not file contents and not settings. After the first synchronization each computer keeps itself current on its own.</li>
         <li>Publish again whenever you like; the new seed replaces the old one. A seed that is old still works, as long as the server still honours its bookmark; if not, DriveCraft scans in full.</li>
-        <li>Anyone who can open the library can see the <code>.drivecraft</code> folder and so the names of every file in the seed. In a library where some folders are restricted to certain people, think before publishing one.</li>
+        <li>Anyone who can open the library can see the <code>.drivecraft</code> folder. If you publish as an owner of the library, the seed lists every folder and file, restricted ones included, and who may open each restricted one, so <strong>anyone who can read the seed can see those names and permissions</strong>. If you are not an owner, DriveCraft says so and leaves restricted folders and files out of the seed instead. Publishing says which it did.</li>
+        <li>Each computer that starts from the seed works out which restricted folders its own user may not open and removes them, with everything inside them, from its list, without any warning. Where the seed's permissions cannot settle it (a SharePoint group, a sharing link), DriveCraft asks the library with that user's sign-in. Removed folders are asked about again a day later, or as soon as the library reports a change to them. In the run summary they appear as "not open to you, left alone".</li>
+        <li>The first time you publish from a library connected with an older DriveCraft, the library's list is read once more to learn which folders are restricted. This takes about as long as a first scan. Reading the permissions themselves is quick: only restricted items are asked about, twenty at a time.</li>
         <li><code>drivecraft sync NAME --no-seed</code> ignores a seed and scans in full.</li>
+      </ul>
+    </section>
+
+    <section id="permissions">
+      <h2>Permissions: who may open what</h2>
+      <p>SharePoint has no single place that shows which folders and files have their own permissions and who may open them. DriveCraft keeps that list for each library.</p>
+      <pre><code>drivecraft permissions NAME
+drivecraft permissions NAME --find "Alex Morgan"
+drivecraft permissions NAME --refresh</code></pre>
+      <ul>
+        <li>The first command prints the library's own permissions, then each folder or file that has permissions of its own, indented under the folders that hold it, with each person, group or sharing link and what they may do. Everything not listed takes the permissions of the nearest listed folder above it.</li>
+        <li><code>--find</code> shows only what mentions all the words you give, in the path or in a person's or group's name, e-mail or login. A person may also reach folders through groups; SharePoint does not tell DriveCraft who is in its own groups, so those show by the group's name.</li>
+        <li><code>--refresh</code> reads the permissions from the library again. The first time, they are read automatically.</li>
+        <li>In the desktop app it is <strong>Permissions</strong>, beside Recycle bin under the library. It has a search box, filters for kind of person and kind of access, and a Refresh button.</li>
+        <li>Only an owner of the library sees everyone's permissions. Anyone else sees only what applies to them, and DriveCraft says so above the list.</li>
+        <li>Nothing can be changed from here; change permissions in SharePoint.</li>
+      </ul>
+      <h3>Checking a new library</h3>
+      <pre><code>drivecraft permissions NAME --probe</code></pre>
+      <ul>
+        <li>This asks the library a few read-only questions and says in plain words what it answered: who you are signed in as and whether your group memberships can be read, whether the library marks folders that have permissions of their own, whether permissions can be listed (and whether the list is complete), and what the library answers for an item that cannot be had. Nothing is changed. Run it once on a new library and keep the output if anything looks wrong.</li>
       </ul>
     </section>
 

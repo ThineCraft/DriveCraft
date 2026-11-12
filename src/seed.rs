@@ -8,6 +8,17 @@
 //!
 //! Seeds live in a folder named `.drivecraft` at the top of the library. DriveCraft
 //! never synchronizes that folder as content.
+//!
+//! Whoever can open the library can read its seed, but not everyone can open
+//! everything in a library. When the person publishing can read everyone's
+//! permissions (an owner of the library), the seed lists every item and, for each one
+//! with permissions of its own, who may open it; a computer that starts from the seed
+//! works out from that what its own user may open and removes the rest from its
+//! catalog, asking the server whenever the list cannot settle it. Anyone who can read
+//! the seed can see those names and permissions. When the person publishing cannot
+//! read everyone's permissions, each restricted item is left out instead, with
+//! everything inside it, and only its identifier is kept for each computer to ask the
+//! server about with its own user's sign-in.
 
 use crate::catalog::{Catalog, Connection, SeedInfo};
 use crate::remote::{ItemKind, Remote, RemoteItem, UploadTarget};
@@ -25,8 +36,10 @@ It holds a snapshot of this library's file list, called a seed. When another\r\n
 computer connects to this library with DriveCraft, it reads the seed so that it\r\n\
 does not have to scan the whole library from the beginning.\r\n\r\n\
 The seed lists the names, sizes and identifiers of the files in the library. It\r\n\
-does not contain the files themselves. It is safe to delete this folder; the next\r\n\
-computer to connect will simply do a full scan.\r\n";
+does not contain the files themselves. When it was made by an owner of the\r\n\
+library, it also lists who may open each folder and file that has permissions of\r\n\
+its own; otherwise those are left out of it. It is safe to delete this folder; the\r\n\
+next computer to connect will simply do a full scan.\r\n";
 
 /// True for the seed folder and anything inside it.
 pub fn is_seed_path(rel: &str) -> bool {
@@ -76,10 +89,16 @@ fn gunzip(src: &Path, dest: &Path, limit: u64) -> Result<()> {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Published {
     pub items: u64,
+    /// Parts of the library with permissions of their own, left out of the seed.
+    pub withheld: u64,
     pub bytes: u64,
     pub name: String,
     /// Older seeds that were removed.
     pub replaced: u64,
+    /// The seed carries who may open each item with permissions of its own.
+    pub permissions: bool,
+    /// Why the permissions could not be included, in plain words.
+    pub note: Option<String>,
 }
 
 fn work_file(work_dir: &Path, conn: &Connection, ext: &str) -> PathBuf {
@@ -99,6 +118,14 @@ pub async fn publish<R: Remote>(
     let mut conn = cat.connection_by_id(conn.id)?;
     if conn.delta_link.is_none() {
         bail!("this library has not been fully scanned on this computer yet; synchronize it first");
+    }
+    if !conn.perms_known {
+        // The catalog was filled before DriveCraft asked which items have permissions
+        // of their own (or it came from a seed). Without that, the seed could show
+        // everyone the names of things only some may open, so read the library's
+        // list once more, noting only that.
+        crate::permissions::survey(cat, remote, &conn).await?;
+        conn = cat.connection_by_id(conn.id)?;
     }
     // Bring the bookmark up to this moment first. Otherwise the seed would carry a
     // bookmark from before this computer's own last uploads, and every computer that
@@ -133,7 +160,20 @@ pub async fn publish<R: Remote>(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    let info = cat.export_seed(&conn, &plain, now)?;
+    // Who may open each restricted item, read now with the publisher's sign-in. Only
+    // an owner sees everyone's permissions; anyone else would record lists that leave
+    // people out, so then restricted items are left out of the seed instead.
+    let note = match crate::permissions::read_all(cat, remote, &conn, |_, _| {}).await {
+        Ok(read) if read.full => None,
+        Ok(_) => Some(
+            "You are not an owner of this library, so the server shows you only the permissions that apply to you. Folders and files with permissions of their own were left out of the seed instead."
+                .to_string(),
+        ),
+        Err(e) => Some(format!(
+            "The permissions could not be read ({e:#}). Folders and files with permissions of their own were left out of the seed instead."
+        )),
+    };
+    let info = cat.export_seed(&conn, &plain, now, note.is_none())?;
     gzip(&plain, &packed)?;
     let _ = std::fs::remove_file(&plain);
     let bytes = std::fs::metadata(&packed)?.len();
@@ -183,11 +223,15 @@ pub async fn publish<R: Remote>(
     }
     Ok(Published {
         items: info.items,
+        withheld: info.withheld,
         bytes,
         name,
         replaced,
+        permissions: info.permissions,
+        note,
     })
 }
+
 
 /// The newest seed in the library, if it has one.
 async fn newest<R: Remote>(remote: &R, drive_id: &str) -> Result<Option<RemoteItem>> {

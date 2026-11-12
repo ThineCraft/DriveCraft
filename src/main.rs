@@ -114,6 +114,23 @@ enum Cmd {
     /// Publish a seed: a snapshot of the library's file list, stored in the library,
     /// so that other computers can skip the first full scan.
     Seed { name: String },
+    /// Show who may open what in a library: the library's own permissions, and each
+    /// folder or file that has permissions of its own. Read-only; nothing is changed.
+    Permissions {
+        name: String,
+        /// Read the permissions from the server again first.
+        #[arg(long)]
+        refresh: bool,
+        /// Show only folders and files whose path, or whose people, groups or links,
+        /// mention all of these words.
+        #[arg(long)]
+        find: Option<String>,
+        /// Ask the server a few read-only questions and say what it answered: whether
+        /// it marks restricted items, lets permissions be listed, and shows group
+        /// memberships. For trying DriveCraft against a new library.
+        #[arg(long)]
+        probe: bool,
+    },
     /// Show where DriveCraft's log files are.
     Logs,
     /// Choose which network connection DriveCraft sends through.
@@ -236,6 +253,7 @@ fn report_lines(conn: &Connection, r: &Report, dry_run: bool) -> Vec<String> {
     add(r.conflicts, "conflicts");
     add(r.skipped, "skipped");
     add(r.held_deletes, "deletions held back");
+    add(r.no_access, "not open to you, left alone");
     add(r.failed, "FAILED");
     let summary = if parts.is_empty() {
         "nothing to do".to_string()
@@ -522,10 +540,78 @@ async fn run(cli: Cli) -> Result<bool> {
                 human_bytes(done.bytes),
                 drivecraft::seed::FOLDER
             );
+            if done.permissions {
+                println!(
+                    "The seed lists who may open each folder or file with permissions of its own. Anyone who can read \
+                     the seed can see those names and permissions. Each computer removes what its own user may not open."
+                );
+            }
+            if let Some(note) = &done.note {
+                println!("{note}");
+            }
+            if done.withheld > 0 {
+                println!(
+                    "Left out {} folder(s) or file(s) with permissions of their own, and everything inside them. \
+                     Each computer asks the library whether its own user may open them.",
+                    done.withheld
+                );
+            }
             if done.replaced > 0 {
                 println!("Replaced {} older seed(s).", done.replaced);
             }
             println!("Other computers that connect to this library will start from it instead of scanning everything.");
+        }
+        Cmd::Permissions { name, refresh, find, probe } => {
+            let cat = home.catalog()?;
+            let conn = cat
+                .connection(&name)?
+                .ok_or_else(|| anyhow!("no connection named '{name}'. Run: drivecraft list"))?;
+            if probe {
+                let auth = home.authenticator()?;
+                auth.current().await.ok_or_else(|| anyhow!("not signed in. Run: drivecraft login"))?;
+                let graph = GraphClient::new(auth);
+                // An item this computer was refused, if there is one, shows what refusal looks like.
+                let refused = cat.withheld_due(conn.id, i64::MAX)?.into_iter().next();
+                println!("Asking the library '{}' a few read-only questions about permissions...", conn.name);
+                for line in graph.probe_permissions(&conn.drive_id, refused.as_deref()).await {
+                    println!("  {line}");
+                }
+                println!("Nothing was changed.");
+                return Ok(true);
+            }
+            if refresh || cat.permissions_read(conn.id)?.0.is_none() {
+                let auth = home.authenticator()?;
+                auth.current().await.ok_or_else(|| anyhow!("not signed in. Run: drivecraft login"))?;
+                let graph = GraphClient::new(auth);
+                println!("Reading permissions from the library...");
+                let read = drivecraft::permissions::read_all(&cat, &graph, &conn, |done, total| {
+                    if total > 50 {
+                        println!("  {done} of {total} items");
+                    }
+                })
+                .await?;
+                println!(
+                    "Read the permissions of {} items{}.",
+                    read.items,
+                    if read.refused > 0 { format!("; the server would not show {}", read.refused) } else { String::new() }
+                );
+            }
+            let view = drivecraft::permissions::view(&cat, &conn)?;
+            let shown = match find.as_deref() {
+                Some(words) => drivecraft::permissions::find(&view, words),
+                None => view.entries.clone(),
+            };
+            for line in drivecraft::permissions::lines(&view, &shown) {
+                println!("{line}");
+            }
+            if let Some(at) = view.read_at {
+                let restricted = view.entries.iter().filter(|e| !e.path.is_empty()).count();
+                println!(
+                    "{restricted} folder(s) or file(s) with permissions of their own{}. Read {}.",
+                    if find.is_some() { format!(", {} shown", shown.iter().filter(|e| !e.path.is_empty()).count()) } else { String::new() },
+                    runlog::human_duration((drivecraft::problems::unix_now() - at).max(0) as f64) + " ago"
+                );
+            }
         }
         Cmd::Logs => {
             let dir = runlog::logs_dir(&home.dir);

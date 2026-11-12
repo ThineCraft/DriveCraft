@@ -69,6 +69,7 @@ const CHIPS = [
   ["conflicts", "conflicts", "warn"],
   ["skipped", "skipped", "warn"],
   ["held_deletes", "deletions held back", "warn"],
+  ["no_access", "not open to you, left alone"],
   ["failed", "failed", "bad"],
 ];
 
@@ -440,7 +441,7 @@ function renderDetail() {
   $("run-sync-label").textContent = mode.run;
   for (const id of ["run-icon-up", "run-icon-down", "run-icon-sync"]) $(id).toggleAttribute("hidden", id !== mode.icon);
   $("run-status").textContent = busy
-    ? "Working…"
+    ? stageOf[c.name] || "Working…"
     : c.first_scan === "interrupted"
       ? "The first scan was interrupted; it will resume"
       : "Ready";
@@ -624,7 +625,21 @@ function renderLog(c) {
   box.scrollTop = box.scrollHeight;
 }
 
+// What each running library says it is doing now, shown in place of "Working…".
+const stageOf = {};
 function pushLog(name, text, cls = "") {
+  // A stage is where the run has got to. It replaces the last one beside the
+  // button; only a new kind of work is added to the activity list.
+  if (text.startsWith("stage: ")) {
+    text = text.slice(7);
+    const kind = (t) => (t || "").split(":")[0];
+    const fresh = kind(text) !== kind(stageOf[name]);
+    stageOf[name] = text;
+    if (name === selected && isBusy(current())) $("run-status").textContent = text;
+    if (!fresh) return;
+    text = kind(text);
+    cls = "head";
+  }
   // A progress line says the same words every time; on screen the numbers are enough.
   // (The log file keeps the full line.)
   if (text.startsWith("progress: ")) {
@@ -797,14 +812,17 @@ $("seed-publish").addEventListener("click", async () => {
   const c = current();
   const ok = await confirmBox(
     `Publish a seed for ${c.name}?`,
-    "DriveCraft will store a snapshot of this library's file list in a .drivecraft folder in the library. Anyone who can open the library can see that folder. It lists file names and sizes, not the files themselves.",
+    "DriveCraft will store a snapshot of this library's file list in a .drivecraft folder in the library. Anyone who can open the library can see that folder. It lists file names and sizes, not the files themselves. If you are an owner of the library, it also lists the folders and files that have permissions of their own and who may open them, so anyone who can open the library can see those names and permissions; otherwise such folders and files are left out of it.",
     "Publish"
   );
   if (!ok) return;
   toast("Publishing the seed…", true);
   try {
     const done = await invoke("publish_seed", { name: c.name });
-    toast(`Seed published: ${done.items.toLocaleString()} items, ${humanBytes(done.bytes).join(" ")}.`, true);
+    const perms = done.permissions ? " It lists who may open each restricted folder; each computer removes what its own user may not open." : "";
+    const left = done.withheld ? ` ${done.withheld.toLocaleString()} restricted folders or files were left out.` : "";
+    const note = done.note ? ` ${done.note}` : "";
+    toast(`Seed published: ${done.items.toLocaleString()} items, ${humanBytes(done.bytes).join(" ")}.${perms}${left}${note}`, true);
   } catch (e) {
     toast(e);
   }
@@ -1436,6 +1454,161 @@ $("bin-sync").addEventListener("click", () => {
   runSync(name);
 });
 
+// Who may open what in the selected library. The structure comes from the catalog,
+// so it shows at once however large the library is; Refresh reads it from the
+// server again. Every search and filter runs here, on what is already shown.
+let permsFor = null;
+let permsData = null;
+let permsShown = 150;
+const PERM_ROLES = { owner: "Full control", write: "Can edit", read: "Can view" };
+const PERM_KINDS = { user: "person", group: "group", site_group: "SharePoint group", site_user: "SharePoint", link: "sharing link", application: "app", unknown: "other" };
+function permsError(e) {
+  $("perms-error").textContent = e ? String(e) : "";
+  $("perms-error").hidden = !e;
+}
+function permRole(roles) {
+  return roles.map((r) => PERM_ROLES[r] || r).join(", ") || "No access";
+}
+function permHay(p) {
+  return `${p.name} ${p.email || ""} ${p.login || ""}`.toLowerCase();
+}
+function permsFilters() {
+  return {
+    words: $("perms-filter").value.toLowerCase().split(/\s+/).filter(Boolean),
+    kind: $("perms-kind").value,
+    role: $("perms-role").value,
+  };
+}
+// Whether one permission passes the "who" and "what they may do" filters.
+function permPasses(p, f) {
+  const kind = ["user", "group", "site_group", "link"].includes(p.kind) ? p.kind : "other";
+  return (!f.kind || kind === f.kind) && (!f.role || p.roles.includes(f.role));
+}
+// An entry is shown when every word is in its path or in one person, group or link,
+// and something in it passes the filters.
+function permsMatch(e, f) {
+  const path = e.path.toLowerCase();
+  const filtered = !!(f.kind || f.role);
+  const people = filtered ? e.permissions.filter((p) => permPasses(p, f)) : e.permissions;
+  if (filtered && people.length === 0) return false;
+  if (!f.words.length) return true;
+  return f.words.every((w) => path.includes(w)) || people.some((p) => f.words.every((w) => permHay(p).includes(w)));
+}
+async function permsLoad(name, refresh) {
+  const button = $("perms-reload");
+  button.disabled = true;
+  if (refresh) $("perms-status").textContent = "Reading permissions from the library…";
+  try {
+    const data = await invoke("library_permissions", { name, refresh });
+    if (permsFor !== name) return;
+    permsData = data;
+    permsError(null);
+  } catch (e) {
+    if (permsFor === name) permsError(/denied|403|forbidden/i.test(String(e))
+      ? `The library would not let this account read its permissions. ${e}`
+      : e);
+  }
+  button.disabled = false;
+  if (permsFor === name) renderPerms();
+}
+function renderPerms() {
+  const box = $("perms-list");
+  const data = permsData;
+  if (!data) { box.replaceChildren(); return; }
+  const f = permsFilters();
+  for (const id of ["perms-kind", "perms-role"]) $(id).classList.toggle("on", !!$(id).value);
+  $("perms-clear").hidden = !(f.words.length || f.kind || f.role);
+  $("perms-partial").hidden = !data.read_at || data.full;
+  $("perms-when").textContent = data.read_at ? `Read ${binWhen(data.read_at * 1000)}` : "";
+
+  const library = data.entries.find((e) => e.path === "");
+  const own = data.entries.filter((e) => e.path !== "");
+  const found = own.filter((e) => permsMatch(e, f));
+  let status;
+  if (!data.read_at) status = "Permissions have not been read for this library yet. Refresh reads them from the library.";
+  else if (own.length === 0) status = "Nothing in this library has permissions of its own: everything takes the library’s.";
+  else if (found.length === own.length) status = `${own.length.toLocaleString()} ${own.length === 1 ? "folder or file has" : "folders and files have"} permissions of their own`;
+  else status = `${found.length.toLocaleString()} of ${own.length.toLocaleString()} match`;
+  $("perms-status").textContent = status;
+  // Searching for a person: say that groups they are in are not resolved here.
+  const byPerson = f.words.length && found.some((e) => e.permissions.some((p) => f.words.every((w) => permHay(p).includes(w))));
+  $("perms-groups-note").hidden = !byPerson;
+
+  const entry = (e, isLibrary) => {
+    const path = el("span", { class: "perm-path", title: isLibrary ? "" : e.path });
+    path.append(isLibrary ? document.createTextNode(`The library: ${permsFor}`) : binMarked(e.path, f.words));
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("class", "ic");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", `#i-${isLibrary ? "cloud" : e.folder ? "folder" : "file"}`);
+    icon.append(use);
+    const head = el("div", { class: "perm-head" }, icon, path,
+      el("span", { class: "tag", text: isLibrary ? "Everything else takes these" : "Own permissions" }));
+    const card = el("div", { class: `perm-entry${isLibrary ? " library" : ""}`, style: isLibrary ? "" : `margin-left: ${Math.min(e.nesting - 1, 8) * 1.2}rem` }, head);
+    if (e.state === "refused") card.append(el("p", { class: "perm-none", text: "The library would not show who may open this." }));
+    else if (e.state === "unknown") card.append(el("p", { class: "perm-none", text: "Not read yet." }));
+    else if (e.permissions.length === 0) card.append(el("p", { class: "perm-none", text: "Nobody is listed." }));
+    else {
+      const rows = el("div", { class: "perm-who" });
+      for (const p of e.permissions) {
+        const passes = permPasses(p, f) && (!f.words.length || f.words.every((w) => permHay(p).includes(w)) || f.words.every((w) => e.path.toLowerCase().includes(w)));
+        const name = el("span", { class: `name${passes ? "" : " dim"}`, title: [p.name, p.email, p.login].filter(Boolean).join(" · ") });
+        name.append(binMarked(p.email && !p.name.includes(p.email) ? `${p.name} <${p.email}>` : p.name, f.words));
+        rows.append(name,
+          el("span", { class: `kind${passes ? "" : " dim"}`, text: PERM_KINDS[p.kind] + (p.via_link ? " · by link" : "") }),
+          el("span", { class: `role${p.roles.includes("owner") ? " owner" : ""}${passes ? "" : " dim"}`, text: permRole(p.roles) }));
+      }
+      card.append(rows);
+    }
+    return card;
+  };
+  const shown = found.slice(0, permsShown);
+  box.replaceChildren(...(library ? [entry(library, true)] : []), ...shown.map((e) => entry(e, false)));
+  if (found.length > shown.length) {
+    box.append(el("button", { class: "btn quiet bin-more", text: `Show ${Math.min(300, found.length - shown.length).toLocaleString()} more`,
+      onclick: () => { permsShown += 300; renderPerms(); } }));
+  }
+  if (own.length > 0 && found.length === 0) {
+    box.append(el("p", { class: "muted", text: "Nothing with permissions of its own matches. Try fewer words or clear the filters." }));
+  }
+}
+let permsTyping = null;
+function permsChanged() {
+  permsShown = 150;
+  clearTimeout(permsTyping);
+  permsTyping = setTimeout(renderPerms, 60);
+}
+$("perms-filter").addEventListener("input", permsChanged);
+for (const id of ["perms-kind", "perms-role"]) $(id).addEventListener("change", permsChanged);
+$("perms-clear").addEventListener("click", () => {
+  $("perms-filter").value = "";
+  for (const id of ["perms-kind", "perms-role"]) $(id).value = "";
+  permsChanged();
+  $("perms-filter").focus();
+});
+$("perms-open").addEventListener("click", async () => {
+  closePops();
+  permsFor = selected;
+  permsData = null;
+  permsShown = 150;
+  $("perms-title").textContent = `Permissions: ${permsFor}`;
+  $("perms-filter").value = "";
+  for (const id of ["perms-kind", "perms-role"]) $(id).value = "";
+  $("perms-status").textContent = "";
+  $("perms-partial").hidden = true;
+  $("perms-when").textContent = "";
+  permsError(null);
+  $("perms-dialog").showModal();
+  $("perms-filter").focus();
+  renderPerms();
+  // What the catalog holds shows at once; if nothing was ever read, read it now.
+  await permsLoad(permsFor, false);
+  if (permsData && !permsData.read_at && permsFor) permsLoad(permsFor, true);
+});
+$("perms-reload").addEventListener("click", () => permsFor && permsLoad(permsFor, true));
+$("perms-close").addEventListener("click", () => $("perms-dialog").close());
+$("perms-dialog").addEventListener("close", () => { permsFor = null; permsData = null; });
+
 // Checked-out files in the selected library
 let checkoutsFor = null;
 function checkoutsError(e) {
@@ -1737,6 +1910,7 @@ $("add-form").addEventListener("submit", async (ev) => {
 // Events from the core
 listen("sync-started", (ev) => {
   const name = ev.payload;
+  delete stageOf[name];
   pushLog(name, `── ${new Date().toLocaleTimeString()} ──`, "head");
   if (state) {
     const c = state.connections.find((x) => x.name === name);
@@ -1761,6 +1935,7 @@ listen("notice", (ev) => {
 listen("sync-finished", (ev) => {
   const f = ev.payload;
   delete progressOf[f.name];
+  delete stageOf[f.name];
   results[f.name] = f;
   if (f.error) pushLog(f.name, `stopped: ${f.error}`, "bad");
   if (problemsFor === f.name) loadProblems();

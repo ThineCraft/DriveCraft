@@ -7,7 +7,7 @@ use drivecraft::graph::GraphClient;
 use drivecraft::quickxor::hash_bytes;
 use drivecraft::remote::*;
 use serde_json::json;
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{header, headers, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn client(server: &MockServer) -> GraphClient<StaticToken> {
@@ -28,7 +28,7 @@ async fn change_feed_is_read_page_by_page_with_the_users_token() {
     Mock::given(method("GET"))
         .and(path("/drives/D/root/delta"))
         .and(header("Authorization", "Bearer TESTTOKEN"))
-        .and(header("Prefer", "deltashowremovedasdeleted"))
+        .and(headers("Prefer", vec!["deltashowremovedasdeleted", "hierarchicalsharing"]))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "value": [ { "id": "R", "name": "root", "root": {}, "folder": {} }, item_json("F1", "a.txt") ],
             "@odata.nextLink": format!("{}/page2", server.uri())
@@ -117,6 +117,205 @@ async fn download_writes_the_file_and_reports_its_hash() {
     assert_eq!(d.size, 5);
     assert_eq!(d.hash, hash_bytes(b"hello"));
     assert_eq!(std::fs::read(&dest).unwrap(), b"hello");
+}
+
+#[tokio::test]
+async fn what_the_server_refuses_is_told_apart_from_other_errors() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/drives/D/items/LOCKED/content"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({ "error": { "code": "accessDenied", "message": "no" } })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/drives/D/items/HR"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({ "error": { "code": "itemNotFound", "message": "x" } })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/drives/D/items/BOARD"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "BOARD", "name": "Board", "folder": { "childCount": 1 }, "shared": {},
+            "parentReference": { "id": "R", "driveId": "D" }
+        })))
+        .mount(&server)
+        .await;
+    let c = client(&server);
+    let dir = tempfile::tempdir().unwrap();
+    let err = c.download("D", "LOCKED", &dir.path().join("x")).await.unwrap_err();
+    assert!(matches!(err, RemoteError::Forbidden(_)), "{err:?}");
+    assert!(matches!(c.item("D", "HR").await, Err(RemoteError::NotFound(_))));
+    let board = c.item("D", "BOARD").await.unwrap();
+    assert_eq!((board.kind, board.own_permissions, board.parent_id.as_deref()), (ItemKind::Folder, true, Some("R")));
+}
+
+/// Permissions as the server lists them for an item: a SharePoint group, a person
+/// (with their SharePoint login), a directory group, and a link for named people.
+fn permissions_json() -> serde_json::Value {
+    json!({ "value": [
+        { "id": "3", "roles": ["owner"], "grantedToV2": { "siteGroup": { "id": "3", "displayName": "Contoso Owners", "loginName": "Contoso Owners" } } },
+        { "id": "aW", "roles": ["write"], "grantedToV2": {
+            "user": { "id": "dana-id", "displayName": "Dana Whitfield", "email": "dana@contoso.com" },
+            "siteUser": { "id": "12", "displayName": "Dana Whitfield", "loginName": "i:0#.f|membership|dana@contoso.com" } } },
+        { "id": "bX", "roles": ["read"], "grantedToV2": { "group": { "id": "hr-team", "displayName": "HR Team", "email": "hr@contoso.com" } } },
+        { "id": "cY", "roles": ["read"], "link": { "scope": "users", "type": "view" },
+          "grantedToIdentitiesV2": [ { "user": { "id": "alex-id", "displayName": "Alex Morgan", "email": "alex@contoso.com" } } ] }
+    ]})
+}
+
+#[test]
+fn permissions_are_read_one_entry_per_person_group_or_link() {
+    let perms = drivecraft::graph::parse_permissions(&permissions_json());
+    let seen: Vec<(PrincipalKind, Option<&str>, &str, String, bool)> = perms
+        .iter()
+        .map(|p| (p.kind, p.principal_id.as_deref(), p.name.as_str(), p.roles.join(","), p.via_link))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            (PrincipalKind::SiteGroup, Some("3"), "Contoso Owners", "owner".into(), false),
+            (PrincipalKind::User, Some("dana-id"), "Dana Whitfield", "write".into(), false),
+            (PrincipalKind::Group, Some("hr-team"), "HR Team", "read".into(), false),
+            (PrincipalKind::Link, None, "view link (users)", "read".into(), false),
+            (PrincipalKind::User, Some("alex-id"), "Alex Morgan", "read".into(), true),
+        ]
+    );
+    assert_eq!(perms[1].login.as_deref(), Some("i:0#.f|membership|dana@contoso.com"));
+    assert_eq!(perms[1].email.as_deref(), Some("dana@contoso.com"));
+}
+
+#[tokio::test]
+async fn permissions_are_asked_for_in_batches_and_a_throttled_part_is_sent_again() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/$batch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "responses": [
+            { "id": "1", "status": 429, "headers": { "Retry-After": "1" }, "body": { "error": { "code": "tooManyRequests", "message": "slow down" } } },
+            { "id": "0", "status": 200, "body": permissions_json() },
+            { "id": "2", "status": 403, "body": { "error": { "code": "accessDenied", "message": "no" } } }
+        ]})))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/$batch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "responses": [
+            { "id": "0", "status": 200, "body": { "value": [] } }
+        ]})))
+        .mount(&server)
+        .await;
+    let c = client(&server);
+    let ids: Vec<String> = ["HR", "BOARD", "LEGAL"].iter().map(|s| s.to_string()).collect();
+    let started = std::time::Instant::now();
+    let answers = c.permissions("D", &ids).await.unwrap();
+    assert!(started.elapsed() >= std::time::Duration::from_secs(1), "waited as the server asked");
+
+    let get = |id: &str| answers.iter().find(|(i, _)| i == id).map(|(_, a)| a).unwrap();
+    assert_eq!(get("HR").as_ref().unwrap().len(), 5);
+    assert!(get("BOARD").as_ref().unwrap().is_empty(), "answered on the second try");
+    assert!(matches!(get("LEGAL"), Err(RemoteError::Forbidden(_))));
+
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(reqs.len(), 2);
+    let first: serde_json::Value = serde_json::from_slice(&reqs[0].body).unwrap();
+    assert_eq!(first["requests"][0]["url"], "/drives/D/items/HR/permissions");
+    assert_eq!(first["requests"].as_array().unwrap().len(), 3);
+    let second: serde_json::Value = serde_json::from_slice(&reqs[1].body).unwrap();
+    assert_eq!(second["requests"][0]["url"], "/drives/D/items/BOARD/permissions");
+}
+
+#[tokio::test]
+async fn group_memberships_are_read_with_the_ordinary_sign_in_when_the_server_allows() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "alex-id", "displayName": "Alex Morgan" })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/me/transitiveMemberOf"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [
+                { "@odata.type": "#microsoft.graph.group", "id": "sales-team" },
+                { "@odata.type": "#microsoft.graph.directoryRole", "id": "role-1" }
+            ],
+            "@odata.nextLink": format!("{}/groups-page-2", server.uri())
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/groups-page-2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [ { "@odata.type": "#microsoft.graph.group", "id": "hr-team" } ]
+        })))
+        .mount(&server)
+        .await;
+    let who = client(&server).identity().await.unwrap();
+    assert_eq!(who.user_id, "alex-id");
+    assert_eq!(who.groups, Some(vec!["sales-team".to_string(), "hr-team".to_string()]));
+
+    let refusing = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "alex-id", "displayName": "Alex Morgan" })))
+        .mount(&refusing)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/me/transitiveMemberOf"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({ "error": { "code": "Authorization_RequestDenied", "message": "no" } })))
+        .mount(&refusing)
+        .await;
+    let who = client(&refusing).identity().await.unwrap();
+    assert_eq!(who.groups, None, "not known, rather than none");
+}
+
+#[tokio::test]
+async fn the_probe_says_in_plain_words_what_the_server_answered() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "alex-id", "displayName": "Alex Morgan" })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/me/transitiveMemberOf"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "value": [] })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/drives/D/root/delta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [
+                { "id": "R", "name": "root", "root": {}, "folder": {}, "shared": {} },
+                { "id": "HR", "name": "HR", "folder": {}, "shared": {}, "parentReference": { "id": "R" } },
+                item_json("F1", "a.txt")
+            ],
+            "@odata.deltaLink": format!("{}/bookmark", server.uri())
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/$batch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "responses": [
+            { "id": "0", "status": 200, "body": permissions_json() },
+            { "id": "1", "status": 200, "body": { "value": [] } }
+        ]})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/drives/D/items/DriveCraftProbeNoSuchItem"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({ "error": { "code": "itemNotFound", "message": "gone" } })))
+        .mount(&server)
+        .await;
+    let text = client(&server).probe_permissions("D", None).await.join("\n");
+    assert!(text.contains("Signed in as Alex Morgan"), "{text}");
+    assert!(text.contains("Group memberships CAN be read"), "{text}");
+    assert!(text.contains("DOES mark items with permissions of their own: 1 of the first 3"), "{text}");
+    assert!(text.contains("Permissions of the library's top folder CAN be listed: 5 entries"), "{text}");
+    assert!(text.contains("including owners"), "{text}");
+    assert!(text.contains("\"not found\" (404)"), "{text}");
+    let reqs = server.received_requests().await.unwrap();
+    assert!(reqs.iter().all(|r| r.method.as_str() == "GET" || r.url.path() == "/$batch"), "nothing but reads");
 }
 
 #[tokio::test]

@@ -15,6 +15,11 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 pub const GRAPH_BASE: &str = "https://graph.microsoft.com/v1.0";
 
+/// How the change feed is asked for. Deletions come as items marked deleted, and
+/// sharing information comes only on items that have permissions of their own, which
+/// is how DriveCraft learns which parts of a library not everyone can open.
+pub const DELTA_PREFER: &str = "deltashowremovedasdeleted, hierarchicalsharing";
+
 /// Microsoft asks applications to identify themselves like this; identified traffic
 /// is prioritised over anonymous traffic when a tenant is under load.
 const USER_AGENT: &str = concat!("ISV|ThineCraft|DriveCraft/", env!("CARGO_PKG_VERSION"));
@@ -669,6 +674,177 @@ impl<T: TokenSource> GraphClient<T> {
         self.send(true, |c| c.post(u.clone()).json(&body)).await.map(|_| ())
     }
 
+    // ---- several reads in one request -------------------------------------------
+
+    /// Send up to twenty reads as one request (Microsoft's JSON batching) and return
+    /// each answer by its key. The server judges each read on its own, so one that it
+    /// asks to slow down is waited for and sent again, as a single request would be.
+    async fn batch_get(&self, asks: Vec<(String, reqwest::Url)>) -> RemoteResult<Vec<(String, RemoteResult<Value>)>> {
+        let base_path = reqwest::Url::parse(&self.base)
+            .map(|u| u.path().trim_end_matches('/').to_string())
+            .unwrap_or_default();
+        let mut pending: Vec<(String, reqwest::Url)> = asks;
+        let mut done: Vec<(String, RemoteResult<Value>)> = Vec::new();
+        let mut attempt = 0u32;
+        while !pending.is_empty() {
+            attempt += 1;
+            let requests: Vec<Value> = pending
+                .iter()
+                .enumerate()
+                .map(|(i, (_, u))| {
+                    let rel = u.path().strip_prefix(&base_path).unwrap_or(u.path()).to_string();
+                    let rel = match u.query() {
+                        Some(q) => format!("{rel}?{q}"),
+                        None => rel,
+                    };
+                    json!({ "id": i.to_string(), "method": "GET", "url": rel })
+                })
+                .collect();
+            let body = json!({ "requests": requests });
+            let url = self.url(&["$batch"]);
+            let resp = self.send(true, |c| c.post(url.clone()).json(&body)).await?;
+            let v: Value = resp.json().await.map_err(RemoteError::other)?;
+            let mut again = Vec::new();
+            let mut wait: Option<Duration> = None;
+            let answers = v["responses"].as_array().cloned().unwrap_or_default();
+            for (i, ask) in pending.into_iter().enumerate() {
+                let answer = answers.iter().find(|a| a["id"].as_str() == Some(i.to_string().as_str()));
+                let Some(a) = answer else {
+                    done.push((ask.0, Err(RemoteError::Other("the server did not answer this part of a batch".into()))));
+                    continue;
+                };
+                let status = a["status"].as_u64().unwrap_or(0) as u16;
+                match status {
+                    200..=299 => done.push((ask.0, Ok(a["body"].clone()))),
+                    429 | 503 | 509 | 500 | 502 | 504 if attempt < self.max_attempts => {
+                        let after = a["headers"]
+                            .as_object()
+                            .and_then(|h| h.iter().find(|(k, _)| k.eq_ignore_ascii_case("retry-after")))
+                            .and_then(|(_, v)| v.as_str().and_then(|s| s.trim().parse::<u64>().ok()).or(v.as_u64()))
+                            .map(Duration::from_secs)
+                            .unwrap_or_else(|| Self::backoff(attempt));
+                        wait = Some(wait.map_or(after, |w| w.max(after)));
+                        again.push(ask);
+                    }
+                    _ => done.push((ask.0, Err(error_for(status, &a["body"].to_string())))),
+                }
+            }
+            if let Some(delay) = wait {
+                self.throttled.fetch_add(1, Ordering::Relaxed);
+                self.event(format!(
+                    "throttled: the server asked part of a batch to wait {:.0}s (attempt {attempt})",
+                    delay.as_secs_f64()
+                ));
+                self.hold_off(delay);
+                let _ = self.pacer.slow_down(Instant::now(), delay);
+            }
+            pending = again;
+        }
+        Ok(done)
+    }
+
+    // ---- finding out what the server says about permissions -------------------
+
+    /// A few read-only questions about permissions, answered in plain words: whether
+    /// the change feed says which items have permissions of their own, whether item
+    /// permissions can be listed, whether group memberships can be read, and what an
+    /// item that cannot be had looks like. Nothing is changed anywhere.
+    pub async fn probe_permissions(&self, drive_id: &str, refused_id: Option<&str>) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut say = |s: String| out.push(s);
+
+        match self.identity().await {
+            Ok(me) => {
+                say(format!("Signed in as {} (identifier {}).", me.name, me.user_id));
+                match me.groups {
+                    Some(g) => say(format!(
+                        "Group memberships CAN be read with the current sign-in: {} group(s).",
+                        g.len()
+                    )),
+                    None => say("Group memberships could NOT be read with the current sign-in; DriveCraft will ask the server about folders given to groups.".into()),
+                }
+            }
+            Err(e) => say(format!("Could not ask who is signed in: {e}")),
+        }
+
+        // The change feed, first pages only.
+        let mut link: Option<String> = None;
+        let (mut seen, mut with_facet, mut examples) = (0usize, 0usize, Vec::new());
+        for _ in 0..3 {
+            match self.delta(drive_id, link.as_deref()).await {
+                Ok(page) => {
+                    seen += page.items.len();
+                    for it in page.items.iter().filter(|i| i.own_permissions) {
+                        with_facet += 1;
+                        if examples.len() < 3 {
+                            examples.push(it.id.clone());
+                        }
+                    }
+                    match page.next_link {
+                        Some(n) => link = Some(n),
+                        None => break,
+                    }
+                }
+                Err(e) => {
+                    say(format!("The change feed could not be read: {e}"));
+                    break;
+                }
+            }
+        }
+        if with_facet > 0 {
+            say(format!(
+                "The change feed DOES mark items with permissions of their own: {with_facet} of the first {seen} items carry the sharing mark."
+            ));
+        } else {
+            say(format!(
+                "None of the first {seen} items in the change feed carried the sharing mark. Either none of them has permissions of its own, or the server does not send the mark with this sign-in."
+            ));
+        }
+
+        // The library's own permissions.
+        let mut ask = vec!["root".to_string()];
+        ask.extend(examples.iter().cloned());
+        match self.permissions(drive_id, &ask).await {
+            Ok(answers) => {
+                for (id, answer) in answers {
+                    let what = if id == "root" { "the library's top folder".to_string() } else { format!("item {id}") };
+                    match answer {
+                        Ok(perms) => {
+                            let owner = perms.iter().any(|p| p.roles.iter().any(|r| r == "owner"));
+                            let mut kinds: Vec<&str> = perms.iter().map(|p| p.kind.said()).collect();
+                            kinds.sort();
+                            kinds.dedup();
+                            say(format!(
+                                "Permissions of {what} CAN be listed: {} entries ({}){}.",
+                                perms.len(),
+                                kinds.join(", "),
+                                if owner { ", including owners, so this sign-in sees the full list" } else { "; no owner entry, so this sign-in probably sees only the entries that apply to it" }
+                            ));
+                        }
+                        Err(e) => say(format!("Permissions of {what} could NOT be listed: {e}")),
+                    }
+                }
+            }
+            Err(e) => say(format!("Permissions could not be asked for: {e}")),
+        }
+
+        // What refusal looks like.
+        let probe_id = refused_id.unwrap_or("DriveCraftProbeNoSuchItem");
+        match self.item(drive_id, probe_id).await {
+            Ok(_) => say(format!("Item {probe_id} could be opened.")),
+            Err(e) => {
+                let shape = match &e {
+                    RemoteError::NotFound(_) => "\"not found\" (404)",
+                    RemoteError::Forbidden(_) => "\"access denied\" (403)",
+                    _ => "another error",
+                };
+                let which = if refused_id.is_some() { "An item this computer was refused" } else { "An item that does not exist" };
+                say(format!("{which} is answered with {shape}: {e}"));
+            }
+        }
+        out
+    }
+
     // ---- uploads -------------------------------------------------------------
 
     async fn upload_simple(
@@ -810,7 +986,7 @@ impl<T: TokenSource> Remote for GraphClient<T> {
             None => self.url(&["drives", drive_id, "root", "delta"]),
         };
         let resp = self
-            .send(true, |c| c.get(url.clone()).header("Prefer", "deltashowremovedasdeleted"))
+            .send(true, |c| c.get(url.clone()).header("Prefer", DELTA_PREFER))
             .await?;
         let v: Value = resp.json().await.map_err(RemoteError::other)?;
         let items = v["value"]
@@ -940,6 +1116,68 @@ impl<T: TokenSource> Remote for GraphClient<T> {
         }
     }
 
+    async fn permissions(
+        &self,
+        drive_id: &str,
+        item_ids: &[String],
+    ) -> RemoteResult<Vec<(String, RemoteResult<Vec<Permission>>)>> {
+        let mut out = Vec::new();
+        for chunk in item_ids.chunks(BATCH_LIMIT) {
+            let asks: Vec<(String, reqwest::Url)> = chunk
+                .iter()
+                .map(|id| (id.clone(), self.url(&["drives", drive_id, "items", id, "permissions"])))
+                .collect();
+            for (id, answer) in self.batch_get(asks).await? {
+                out.push((id, answer.map(|v| parse_permissions(&v))));
+            }
+        }
+        Ok(out)
+    }
+
+    async fn identity(&self) -> RemoteResult<Identity> {
+        let mut u = self.url(&["me"]);
+        u.set_query(Some("$select=id,displayName"));
+        let me = self.get_json(u).await?;
+        // Group memberships need only the sign-in DriveCraft already has (User.Read).
+        // Without a directory permission the groups come back with little more than
+        // their identifier, which is all that is needed here.
+        let mut groups = Vec::new();
+        let mut next = Some(self.url(&["me", "transitiveMemberOf"]));
+        let mut known = true;
+        while let Some(url) = next {
+            match self.get_json(url).await {
+                Ok(v) => {
+                    for g in v["value"].as_array().into_iter().flatten() {
+                        if g["@odata.type"].as_str() == Some("#microsoft.graph.group") {
+                            if let Some(id) = g["id"].as_str() {
+                                groups.push(id.to_string());
+                            }
+                        }
+                    }
+                    next = match v["@odata.nextLink"].as_str() {
+                        Some(link) => Some(self.trusted_link(link)?),
+                        None => None,
+                    };
+                }
+                Err(RemoteError::Unauthorized(e)) => return Err(RemoteError::Unauthorized(e)),
+                Err(_) => {
+                    known = false;
+                    next = None;
+                }
+            }
+        }
+        Ok(Identity {
+            user_id: me["id"].as_str().unwrap_or_default().to_string(),
+            name: me["displayName"].as_str().unwrap_or_default().to_string(),
+            groups: known.then_some(groups),
+        })
+    }
+
+    async fn item(&self, drive_id: &str, item_id: &str) -> RemoteResult<RemoteItem> {
+        let v = self.get_json(self.url(&["drives", drive_id, "items", item_id])).await?;
+        parse_item(&v).ok_or_else(|| RemoteError::Other("unexpected item description".into()))
+    }
+
     async fn children(&self, drive_id: &str, parent_id: &str) -> RemoteResult<Vec<RemoteItem>> {
         let mut out = Vec::new();
         let mut next = Some(self.url(&["drives", drive_id, "items", parent_id, "children"]));
@@ -960,7 +1198,11 @@ impl<T: TokenSource> Remote for GraphClient<T> {
 async fn error_from(resp: reqwest::Response) -> RemoteError {
     let status = resp.status().as_u16();
     let text = resp.text().await.unwrap_or_default();
-    let (code, message) = serde_json::from_str::<Value>(&text)
+    error_for(status, &text)
+}
+
+fn error_for(status: u16, text: &str) -> RemoteError {
+    let (code, message) = serde_json::from_str::<Value>(text)
         .ok()
         .map(|v| {
             (
@@ -979,7 +1221,7 @@ async fn error_from(resp: reqwest::Response) -> RemoteError {
         404 => RemoteError::NotFound(detail),
         409 | 412 => RemoteError::Conflict(detail),
         401 => RemoteError::Unauthorized(detail),
-        403 => RemoteError::Other(format!("access denied ({code}): {detail}")),
+        403 => RemoteError::Forbidden(format!("({code}) {detail}")),
         423 => RemoteError::Other(format!("the file is locked or checked out by someone else: {detail}")),
         507 => RemoteError::Other(format!("the library is out of space: {detail}")),
         _ => RemoteError::Other(format!("server error {status} ({code}): {detail}")),
@@ -1007,6 +1249,96 @@ fn format_time(ns: i64) -> Option<String> {
     // Whole seconds: the server does not keep more than that reliably.
     let t = time::OffsetDateTime::from_unix_timestamp(ns / 1_000_000_000).ok()?;
     t.format(&time::format_description::well_known::Rfc3339).ok()
+}
+
+/// Microsoft Graph takes at most this many reads in one batch.
+const BATCH_LIMIT: usize = 20;
+
+/// The person, group or link a permission names, from one of the server's
+/// "identity sets".
+fn principal(set: &Value) -> (PrincipalKind, Option<String>, String, Option<String>, Option<String>) {
+    let s = |v: &Value, k: &str| v[k].as_str().filter(|x| !x.is_empty()).map(String::from);
+    let site_login = s(&set["siteUser"], "loginName");
+    let user = &set["user"];
+    if user.is_object() && s(user, "id").is_some() {
+        return (
+            PrincipalKind::User,
+            s(user, "id"),
+            s(user, "displayName").unwrap_or_default(),
+            s(user, "email").or_else(|| s(&set["siteUser"], "email")),
+            site_login,
+        );
+    }
+    let group = &set["group"];
+    if group.is_object() && s(group, "id").is_some() {
+        return (PrincipalKind::Group, s(group, "id"), s(group, "displayName").unwrap_or_default(), s(group, "email"), None);
+    }
+    let sg = &set["siteGroup"];
+    if sg.is_object() {
+        return (PrincipalKind::SiteGroup, s(sg, "id"), s(sg, "displayName").unwrap_or_default(), None, s(sg, "loginName"));
+    }
+    let su = &set["siteUser"];
+    if su.is_object() {
+        return (PrincipalKind::SiteUser, s(su, "id"), s(su, "displayName").unwrap_or_default(), s(su, "email"), site_login);
+    }
+    let app = &set["application"];
+    if app.is_object() {
+        return (PrincipalKind::Application, s(app, "id"), s(app, "displayName").unwrap_or_default(), None, None);
+    }
+    (PrincipalKind::Unknown, None, String::new(), None, None)
+}
+
+/// Read an item's permissions from the server's JSON, one entry per person, group
+/// or link. A link given to named people becomes one entry for the link and one for
+/// each person.
+pub fn parse_permissions(v: &Value) -> Vec<Permission> {
+    let mut out = Vec::new();
+    for p in v["value"].as_array().into_iter().flatten() {
+        let perm_id = p["id"].as_str().unwrap_or_default().to_string();
+        let roles: Vec<String> = p["roles"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| r.as_str().map(String::from))
+            .collect();
+        let entry = |set: &Value, via_link: bool, scope: Option<String>| {
+            let (kind, principal_id, mut name, email, login) = principal(set);
+            if name.is_empty() {
+                name = email.clone().or_else(|| login.clone()).unwrap_or_else(|| "(no name given)".into());
+            }
+            Permission { perm_id: perm_id.clone(), kind, principal_id, name, email, login, roles: roles.clone(), link_scope: scope, via_link }
+        };
+        if p["link"].is_object() {
+            let link = &p["link"];
+            let scope = link["scope"].as_str().unwrap_or("unknown").to_string();
+            let kind = link["type"].as_str().unwrap_or("view");
+            out.push(Permission {
+                perm_id: perm_id.clone(),
+                kind: PrincipalKind::Link,
+                principal_id: None,
+                name: format!("{kind} link ({scope})"),
+                email: None,
+                login: None,
+                roles: roles.clone(),
+                link_scope: Some(scope.clone()),
+                via_link: false,
+            });
+            let people = p["grantedToIdentitiesV2"].as_array().or_else(|| p["grantedToIdentities"].as_array());
+            for set in people.into_iter().flatten() {
+                out.push(entry(set, true, Some(scope.clone())));
+            }
+        } else if p["grantedToV2"].is_object() || p["grantedTo"].is_object() {
+            let set = if p["grantedToV2"].is_object() { &p["grantedToV2"] } else { &p["grantedTo"] };
+            out.push(entry(set, false, None));
+        } else if let Some(email) = p["invitation"]["email"].as_str() {
+            // Invited by address, not yet accepted: nobody known can use it yet.
+            let mut e = entry(&json!({}), false, None);
+            e.name = email.to_string();
+            e.email = Some(email.to_string());
+            out.push(e);
+        }
+    }
+    out
 }
 
 /// Read one drive item from the server's JSON.
@@ -1043,6 +1375,11 @@ pub fn parse_item(v: &Value) -> Option<RemoteItem> {
         mtime_ns,
         is_root,
         deleted,
+        // With `hierarchicalsharing` asked for, the server puts a sharing facet only on
+        // an item where a permission hierarchy starts: one that does not simply take
+        // its folder's permissions. The facet is there, possibly empty, even when the
+        // item is not shared with anyone. The library's top folder always starts one.
+        own_permissions: !is_root && v.get("shared").is_some_and(|s| !s.is_null()),
     })
 }
 
@@ -1077,5 +1414,17 @@ mod tests {
 
         let notebook = parse_item(&json!({ "id": "N", "name": "Notes", "package": { "type": "oneNote" }, "folder": {} })).unwrap();
         assert_eq!(notebook.kind, ItemKind::Other);
+    }
+
+    #[test]
+    fn a_sharing_facet_marks_permissions_of_its_own() {
+        let restricted = parse_item(&json!({ "id": "H", "name": "HR", "folder": {}, "shared": {} })).unwrap();
+        assert!(restricted.own_permissions, "an empty facet still starts a permission hierarchy");
+        let shared = parse_item(&json!({ "id": "S", "name": "x.docx", "file": {}, "shared": { "scope": "users" } })).unwrap();
+        assert!(shared.own_permissions);
+        let plain = parse_item(&json!({ "id": "P", "name": "y.docx", "file": {} })).unwrap();
+        assert!(!plain.own_permissions);
+        let root = parse_item(&json!({ "id": "R", "name": "root", "root": {}, "folder": {}, "shared": {} })).unwrap();
+        assert!(!root.own_permissions, "the top folder is where everything starts; it is never left out");
     }
 }

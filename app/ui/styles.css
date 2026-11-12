@@ -407,6 +407,29 @@ select.on { border-color: var(--blue); color: var(--blue-soft-ink); font-weight:
 .brow .meta { text-align: right; white-space: nowrap; font-size: .82rem; color: var(--muted); line-height: 1.4; }
 .bin-more { margin: .6rem auto; display: block; }
 
+/* Permissions: the library first, then each item with permissions of its own,
+   indented under the folders that hold it. Long names are cut with an ellipsis;
+   the whole path is in the tooltip. */
+#perms-dialog { width: min(900px, calc(100vw - 2rem)); }
+#perms-dialog .problems { height: 44vh; max-height: 44vh; margin-top: .5rem; }
+#perms-filter { margin-top: .9rem; font-size: 1.05rem; padding: .75rem .9rem !important; }
+#perms-status { margin: .7rem 0 0; min-height: 1.3em; }
+.perms-banner { margin-top: .5rem; }
+.perm-entry { border: 1px solid var(--line); border-radius: 12px; background: var(--bed-2); margin-top: .35rem; padding: .5rem .8rem; min-width: 0; }
+.perm-entry.library { border-color: color-mix(in srgb, var(--blue) 40%, var(--line)); background: color-mix(in srgb, var(--blue) 8%, var(--bed-2)); }
+.perm-head { display: flex; gap: .55rem; align-items: center; min-width: 0; }
+.perm-head .ic { flex: none; color: var(--muted); width: 18px; height: 18px; }
+.perm-path { font-weight: 600; min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.perm-head .tag { flex: none; }
+.perm-who { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: .15rem .8rem; margin: .35rem 0 0 1.6rem; font-size: .9rem; align-items: baseline; }
+.perm-who .name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.perm-who .kind { color: var(--muted); font-size: .82rem; white-space: nowrap; }
+.perm-who .role { white-space: nowrap; font-size: .8rem; font-weight: 600; border-radius: 99px; padding: .05rem .55rem; background: var(--blue-soft); color: var(--blue-soft-ink); justify-self: end; }
+.perm-who .role.owner { background: var(--amber-soft); color: var(--amber-ink); }
+.perm-who .dim { opacity: .55; }
+.perm-entry mark { background: var(--amber-soft); color: var(--amber-ink); border-radius: 3px; padding: 0 1px; }
+.perm-none { margin: .3rem 0 0 1.6rem; font-size: .88rem; color: var(--muted); }
+
 #syncbtn-wrap p { margin: .35rem 0 0; line-height: 1.35; }
 .banner.from-browser { background: color-mix(in srgb, var(--blue) 10%, var(--bed-2)); border-color: color-mix(in srgb, var(--blue) 40%, var(--line)); margin: .8rem 0 0; }
 

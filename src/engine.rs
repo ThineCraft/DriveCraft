@@ -68,6 +68,9 @@ pub struct Report {
     pub held_deletes: u64,
     /// Items taken from a seed instead of a full scan.
     pub seeded: u64,
+    /// Items the server would not let this person have, left alone on this run. Not a
+    /// problem: they are parts of the library meant for other people.
+    pub no_access: u64,
     pub long_paths: u64,
     pub bytes_down: u64,
     pub bytes_up: u64,
@@ -289,6 +292,31 @@ pub struct Engine<'a, R: Remote> {
     server_prefix_len: usize,
     /// The folder is listed in File Explorer, which shows a status beside each item.
     in_explorer: bool,
+    /// When the run last said what it was doing.
+    staged: std::cell::Cell<Option<std::time::Instant>>,
+    /// The seed this run started from lists who may open its restricted items.
+    seed_permissions: bool,
+}
+
+/// "1 file", "2,000 files".
+fn files(n: u64) -> String {
+    format!("{} file{}", count(n), if n == 1 { "" } else { "s" })
+}
+
+/// How often a long stage says how far it has got.
+const STAGE_EVERY: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// A count with thousands separated, as people read them.
+fn count(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, d) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(d);
+    }
+    out
 }
 
 impl<'a, R: Remote> Engine<'a, R> {
@@ -306,6 +334,8 @@ impl<'a, R: Remote> Engine<'a, R> {
             log: Box::new(|_| {}),
             on_progress: Box::new(|_| {}),
             in_explorer: crate::explorer::shown_as(&root).is_some(),
+            staged: std::cell::Cell::new(None),
+            seed_permissions: false,
             root,
             server_prefix_len,
         }
@@ -328,6 +358,28 @@ impl<'a, R: Remote> Engine<'a, R> {
             (self.log)(&format!("would {}", what.as_ref()));
         } else {
             (self.log)(what.as_ref());
+        }
+    }
+
+    /// Say what the run is doing now, in words for whoever is watching it. A run
+    /// spends a long time on work that moves no files; this is what shows then.
+    fn stage(&self, what: impl AsRef<str>) {
+        self.staged.set(Some(std::time::Instant::now()));
+        (self.log)(&format!("stage: {}", what.as_ref()));
+    }
+
+    /// The same during a long stage, to say how far it has got: every few seconds.
+    fn stage_so_far(&self, what: impl FnOnce() -> String) {
+        if self.staged.get().is_none_or(|t| t.elapsed() >= STAGE_EVERY) {
+            self.stage(what());
+        }
+    }
+
+    /// The folder a path is in, as shown in a stage.
+    fn folder_of(&self, path: &Path) -> String {
+        match path.parent().and_then(|p| self.rel_of(p)) {
+            Some(rel) if !rel.is_empty() => rel,
+            _ => "the top folder".into(),
         }
     }
 
@@ -378,7 +430,9 @@ impl<'a, R: Remote> Engine<'a, R> {
     fn fail_at(&mut self, path: &str, why: impl std::fmt::Display) {
         let why = why.to_string();
         self.fail(format!("{path}: {why}"));
-        self.problem(Kind::Failed, path, None, why);
+        // The log keeps the system's own words; the problems list says it plainly.
+        let shown = problems::plain_reason(&why).map(str::to_string).unwrap_or(why);
+        self.problem(Kind::Failed, path, None, shown);
     }
 
     fn abs(&self, rel: &str) -> PathBuf {
@@ -436,8 +490,15 @@ impl<'a, R: Remote> Engine<'a, R> {
         }
 
         let started = std::time::Instant::now();
+        self.stage("Asking the library what has changed");
         let seeded = self.try_seed().await;
+        if seeded && self.seed_permissions {
+            self.decide_from_permissions().await?;
+        }
         self.pull_remote(seeded).await?;
+        if !self.opts.dry_run {
+            self.check_withheld().await?;
+        }
         self.report.scan_secs = started.elapsed().as_secs_f64();
         (self.log)(&format!(
             "read {} changes from the server in {:.1}s",
@@ -464,6 +525,14 @@ impl<'a, R: Remote> Engine<'a, R> {
                 self.report.push_secs = started.elapsed().as_secs_f64();
             }
         }
+        self.report.no_access = self.cat.no_access_count(self.id())?;
+        if self.report.no_access > 0 {
+            // One line, not one per item: these are other people's parts of the library.
+            (self.log)(&format!(
+                "left alone {} items this account may not open (they have permissions of their own)",
+                self.report.no_access
+            ));
+        }
         if !self.opts.dry_run {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -487,6 +556,7 @@ impl<'a, R: Remote> Engine<'a, R> {
         match crate::seed::fetch(self.cat, self.remote, &self.conn, &dir).await {
             Ok(Some(info)) => {
                 self.report.seeded = info.items;
+                self.seed_permissions = info.permissions;
                 (self.log)(&format!(
                     "started from a seed in the library: {} items, so the full scan is skipped",
                     info.items
@@ -499,6 +569,182 @@ impl<'a, R: Remote> Engine<'a, R> {
                 false
             }
         }
+    }
+
+    /// After starting from a seed that lists who may open each restricted item: work
+    /// out, for the person signed in here, which of those items they may not open,
+    /// and remove each such item and everything beneath it from this catalog. Only
+    /// its identifier is kept, so the server can be asked again later.
+    ///
+    /// The recorded permissions decide only where they are certain: they name this
+    /// person, or a directory group the server says they belong to. Where they cannot
+    /// settle it (a SharePoint group, a sharing link, someone known only to
+    /// SharePoint, or groups the server would not list), the server is asked with the
+    /// person's own sign-in. Nothing is kept on a guess. Items inside one that is
+    /// kept are judged on their own, since they can be narrower.
+    async fn decide_from_permissions(&mut self) -> Result<()> {
+        use crate::access::{decide, Decision};
+        use crate::permissions::Recorded;
+        let now = problems::unix_now();
+        self.stage("Working out which restricted folders this account may open");
+        let who = match self.remote.identity().await {
+            Ok(who) => who,
+            Err(e) => {
+                // Without knowing who is signed in, every restricted item is asked about.
+                self.warn(format!(
+                    "could not ask who is signed in ({e}); asking the library about each restricted item instead"
+                ));
+                crate::remote::Identity::default()
+            }
+        };
+        // The restricted items, outermost first.
+        let mut roots: Vec<(usize, String, String)> = Vec::new();
+        for id in self.cat.permission_item_ids(self.id())? {
+            let Some(item) = self.cat.remote_get(self.id(), &id)? else { continue };
+            if item.is_root {
+                continue;
+            }
+            let Some(path) = self.cat.remote_path(self.id(), &item)? else { continue };
+            roots.push((depth(&path), path, id));
+        }
+        roots.sort();
+        let mut removed: Vec<String> = Vec::new();
+        let (mut items_removed, mut roots_removed) = (0u64, 0u64);
+        let mut level_start = 0;
+        while level_start < roots.len() {
+            let level = roots[level_start].0;
+            let level_end = roots[level_start..]
+                .iter()
+                .position(|r| r.0 != level)
+                .map_or(roots.len(), |n| level_start + n);
+            let mut ask: Vec<String> = Vec::new();
+            for (_, path, id) in &roots[level_start..level_end] {
+                if removed.iter().any(|r| path.starts_with(&format!("{r}/"))) {
+                    continue;
+                }
+                let decision = match self.cat.recorded_permissions(self.id(), id)? {
+                    Recorded::Read(perms) => decide(&perms, &who),
+                    _ => Decision::Ask,
+                };
+                match decision {
+                    Decision::Allowed => {}
+                    Decision::Refused => {
+                        items_removed += self.cat.prune_subtree(self.id(), id, now)?;
+                        roots_removed += 1;
+                        removed.push(path.clone());
+                    }
+                    Decision::Ask => ask.push(id.clone()),
+                }
+            }
+            // Ask the server about the rest of this level, several at a time.
+            let remote = self.remote;
+            let drive = self.conn.drive_id.clone();
+            let drive_ref = &drive;
+            let answers: Vec<(String, Result<RemoteItem, RemoteError>)> =
+                futures_util::stream::iter(ask.into_iter().map(|id| async move {
+                    let res = remote.item(drive_ref, &id).await;
+                    (id, res)
+                }))
+                .buffer_unordered(self.opts.concurrency.max(1))
+                .collect()
+                .await;
+            for (id, res) in answers {
+                let checked = match res {
+                    Ok(_) => continue,
+                    Err(RemoteError::NotFound(_) | RemoteError::Forbidden(_)) => now,
+                    // Not sure: removed for now, and asked about again later in this run.
+                    Err(_) => 0,
+                };
+                let path = roots[level_start..level_end]
+                    .iter()
+                    .find(|r| r.2 == id)
+                    .map(|r| r.1.clone())
+                    .unwrap_or_default();
+                items_removed += self.cat.prune_subtree(self.id(), &id, checked)?;
+                roots_removed += 1;
+                removed.push(path);
+            }
+            level_start = level_end;
+        }
+        if roots_removed > 0 {
+            (self.log)(&format!(
+                "removed from this computer's list {roots_removed} restricted folders and files ({items_removed} items) this account may not open"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Ask the server, as this person, about each part of the library a seed left out
+    /// because it has permissions of its own. What the server refuses is noted and
+    /// left alone, with no problem recorded; it is asked about again a day later, or
+    /// sooner if the change feed mentions it. What the server allows is read in full
+    /// and brought to this computer like everything else.
+    async fn check_withheld(&mut self) -> Result<()> {
+        let now = problems::unix_now();
+        let due = self
+            .cat
+            .withheld_due(self.id(), now - crate::catalog::RECHECK_WITHHELD_SECS)?;
+        if due.is_empty() {
+            return Ok(());
+        }
+        self.stage(format!(
+            "Asking the library about {} restricted folders and files",
+            count(due.len() as u64)
+        ));
+        let remote = self.remote;
+        let drive = self.conn.drive_id.clone();
+        let drive_ref = &drive;
+        let mut answers = futures_util::stream::iter(due.into_iter().map(|id| async move {
+            let res = remote.item(drive_ref, &id).await;
+            (id, res)
+        }))
+        .buffer_unordered(self.opts.concurrency.max(1));
+        let mut allowed = Vec::new();
+        while let Some((id, res)) = answers.next().await {
+            match res {
+                Ok(item) => allowed.push((id, item)),
+                Err(RemoteError::NotFound(_) | RemoteError::Forbidden(_)) => {
+                    self.cat.withheld_refused(self.id(), &id, now)?;
+                }
+                // Anything else is a reason to ask again next time, not to stop.
+                Err(e) => self.warn(format!("could not ask the library about a restricted item ({e}); asking again next time")),
+            }
+        }
+        drop(answers);
+        for (id, item) in allowed {
+            match self.read_subtree(item).await {
+                Ok((items, refused)) => {
+                    (self.log)(&format!(
+                        "this account may open a restricted part of the library: {} items to bring here",
+                        items.len()
+                    ));
+                    self.cat.withheld_found(&self.conn, &id, &items, &refused)?;
+                }
+                Err(e) => self.warn(format!("could not read a restricted folder ({e}); trying again next time")),
+            }
+        }
+        Ok(())
+    }
+
+    /// An item and, for a folder, everything beneath it, read folder by folder. Also
+    /// the folders inside it that the server will not list for this person.
+    async fn read_subtree(&self, top: RemoteItem) -> Result<(Vec<RemoteItem>, Vec<String>), RemoteError> {
+        let mut found = vec![top];
+        let mut refused = Vec::new();
+        let mut at = 0;
+        while at < found.len() {
+            if found[at].kind == ItemKind::Folder {
+                let id = found[at].id.clone();
+                match self.remote.children(&self.conn.drive_id, &id).await {
+                    Ok(kids) => found.extend(kids.into_iter().filter(|k| !k.deleted)),
+                    Err(RemoteError::NotFound(_) | RemoteError::Forbidden(_)) => refused.push(id),
+                    Err(e) => return Err(e),
+                }
+                self.stage_so_far(|| format!("Reading a restricted folder: {} items so far", count(found.len() as u64)));
+            }
+            at += 1;
+        }
+        Ok((found, refused))
     }
 
     async fn pull_remote(&mut self, seeded: bool) -> Result<()> {
@@ -537,6 +783,7 @@ impl<'a, R: Remote> Engine<'a, R> {
                 page.delta_link.as_deref(),
             )?;
             self.report.scanned += page.items.len() as u64;
+            self.stage_so_far(|| format!("Reading the library: {} items so far", count(self.report.scanned)));
             if self.report.scanned >= next_progress {
                 (self.log)(&format!(
                     "scanned {} items on the server ({:.0}/s)...",
@@ -559,6 +806,7 @@ impl<'a, R: Remote> Engine<'a, R> {
     // ---- step 2: bring the local folder in line with the server --------------
 
     async fn apply_remote(&mut self) -> Result<()> {
+        self.stage("Working out what changed in the library");
         let dirty = self.cat.dirty_items(self.id())?;
         let mut live: Vec<(String, RemoteItem)> = Vec::new();
         let mut dead: Vec<(Option<LocalRow>, RemoteItem)> = Vec::new();
@@ -583,7 +831,12 @@ impl<'a, R: Remote> Engine<'a, R> {
         live.sort_by(|a, b| depth(&a.0).cmp(&depth(&b.0)).then_with(|| a.0.cmp(&b.0)));
 
         let mut downloads = Vec::new();
+        let (all, mut at) = (live.len() as u64, 0u64);
         for (path, it) in live {
+            at += 1;
+            self.stage_so_far(|| {
+                format!("Comparing the library with this computer: {} of {} changed items", count(at), count(all))
+            });
             // The seed folder is DriveCraft's own; it is never synchronized as content.
             if crate::seed::is_seed_path(&path) {
                 if !self.opts.dry_run {
@@ -908,6 +1161,7 @@ impl<'a, R: Remote> Engine<'a, R> {
         let total = downloads.len();
         let total_bytes: u64 = downloads.iter().map(|d| d.item.size).sum();
         let mut done = 0usize;
+        self.stage(format!("Downloading {}", files(total as u64)));
         let mut progress = Progress::new("downloaded", total, total_bytes);
         let mut stream = futures_util::stream::iter(downloads.into_iter().map(|d| async move {
             let abs = join_rel(root_ref, &d.rel);
@@ -961,6 +1215,18 @@ impl<'a, R: Remote> Engine<'a, R> {
                             self.fail_at(&d.rel, format!("{e:#}"));
                         }
                     }
+                }
+                // Refused to this person: a file with permissions of its own. Not a
+                // failure; it is left alone until the change feed mentions it again.
+                // Not found, for a file known only from someone else's seed, is the
+                // same thing: the server does not show this person what they may not open.
+                Err(RemoteError::Forbidden(_)) => {
+                    let _ = std::fs::remove_file(&tmp);
+                    self.cat.mark_no_access(self.id(), &d.item.id)?;
+                }
+                Err(RemoteError::NotFound(_)) if self.cat.from_seed(self.id(), &d.item.id)? => {
+                    let _ = std::fs::remove_file(&tmp);
+                    self.cat.mark_no_access(self.id(), &d.item.id)?;
                 }
                 Err(e) => {
                     let _ = std::fs::remove_file(&tmp);
@@ -1081,6 +1347,8 @@ impl<'a, R: Remote> Engine<'a, R> {
         let mut new_files: Vec<(String, Stat)> = Vec::new();
         let mut changed: Vec<(LocalRow, Stat)> = Vec::new();
         let mut any_entries = false;
+        let mut checked = 0u64;
+        self.stage("Looking for changes in the folder on this computer");
 
         let mut walk = WalkDir::new(&self.root)
             .min_depth(1)
@@ -1099,6 +1367,14 @@ impl<'a, R: Remote> Engine<'a, R> {
                 Some(Ok(e)) => e,
             };
             any_entries = true;
+            checked += 1;
+            self.stage_so_far(|| {
+                format!(
+                    "Looking for changes on this computer: {} items checked (now in {})",
+                    count(checked),
+                    self.folder_of(entry.path())
+                )
+            });
             let Some(rel) = self.rel_of(entry.path()) else {
                 self.problem(
                     Kind::NotUploaded,
@@ -1420,6 +1696,7 @@ impl<'a, R: Remote> Engine<'a, R> {
         let total = uploads.len();
         let total_bytes: u64 = uploads.iter().map(|u| u.st.size).sum();
         let mut done = 0usize;
+        self.stage(format!("Uploading {}", files(total as u64)));
         let mut progress = Progress::new("uploaded", total, total_bytes);
         let mut stream = futures_util::stream::iter(uploads.into_iter().map(|u| async move {
             let target = match &u.kind {
@@ -1488,6 +1765,8 @@ impl<'a, R: Remote> Engine<'a, R> {
         let mut dir_ids: HashMap<String, Option<String>> = HashMap::new();
         dir_ids.insert(String::new(), Some(root_item.id.clone()));
         let mut uploads = Vec::new();
+        let mut checked = 0u64;
+        self.stage("Checking the source folder against the library");
 
         let mut walk = WalkDir::new(&self.root)
             .min_depth(1)
@@ -1506,6 +1785,15 @@ impl<'a, R: Remote> Engine<'a, R> {
                 }
                 Some(Ok(e)) => e,
             };
+            checked += 1;
+            self.stage_so_far(|| {
+                format!(
+                    "Checking the source folder: {} items checked, {} to upload so far (now in {})",
+                    count(checked),
+                    count(uploads.len() as u64),
+                    self.folder_of(entry.path())
+                )
+            });
             let ft = entry.file_type();
             let Some(rel) = self.rel_of(entry.path()) else {
                 self.report.skipped += 1;
@@ -1728,6 +2016,13 @@ async fn fetch_verified<R: Remote>(
 #[cfg(test)]
 mod pace_tests {
     use super::time_left;
+
+    #[test]
+    fn counts_are_written_as_people_read_them() {
+        let said: Vec<String> = [0, 999, 1000, 166826, 1234567].iter().map(|n| super::count(*n)).collect();
+        assert_eq!(said, ["0", "999", "1,000", "166,826", "1,234,567"]);
+        assert_eq!((super::files(1), super::files(96631)), ("1 file".to_string(), "96,631 files".to_string()));
+    }
 
     #[test]
     fn the_estimate_takes_whichever_of_files_and_bytes_says_longer() {

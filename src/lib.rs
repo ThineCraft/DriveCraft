@@ -1,7 +1,9 @@
 //! DriveCraft: an open-source synchronization client for SharePoint, OneDrive for
 //! work, and (later) ShareCraft.
 
+pub mod access;
 pub mod catalog;
+pub mod permissions;
 pub mod checkouts;
 pub mod details;
 pub mod engine;

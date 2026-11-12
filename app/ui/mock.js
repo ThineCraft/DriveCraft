@@ -116,6 +116,28 @@
       return { library_path: lib, items, next: start + 400 < 1200 ? String(start + 400) : null };
     },
     async restore_bin() { await wait(500); },
+    async library_permissions({ name, refresh }) {
+      await wait(refresh ? 900 : 150);
+      // "Board Archive" shows what someone who is not an owner sees.
+      const full = name !== "Board Archive";
+      const p = (kind, n, roles, extra) => Object.assign({ perm_id: n, kind, principal_id: kind === "link" ? null : n.toLowerCase().replace(/\W+/g, "-"), name: n, email: null, login: null, roles, link_scope: null, via_link: false }, extra || {});
+      const person = (n, roles, extra) => p("user", n, roles, Object.assign({ email: `${n.split(" ")[0].toLowerCase()}@contoso.com` }, extra || {}));
+      const owners = p("site_group", `${name} Owners`, ["owner"]);
+      const members = p("site_group", `${name} Members`, ["write"]);
+      const visitors = p("site_group", `${name} Visitors`, ["read"]);
+      const entries = [
+        { id: "root", path: "", folder: true, nesting: 0, state: "read", permissions: full ? [owners, members, visitors] : [members] },
+        { id: "a", path: "Board", folder: true, nesting: 1, state: "read", permissions: [owners, person("Maria Santos", ["owner"]), p("group", "Board of Directors", ["read"])] },
+        { id: "b", path: "Board/2026/Confidential minutes", folder: true, nesting: 2, state: "read", permissions: [owners, person("Maria Santos", ["owner"])] },
+        { id: "c", path: "Finance", folder: true, nesting: 1, state: "read", permissions: [owners, p("group", "Finance Team", ["write"]), person("Alex Morgan", ["read"])] },
+        { id: "d", path: "Finance/FY27/Budget model.xlsx", folder: false, nesting: 2, state: "read", permissions: [owners, p("group", "Finance Team", ["write"]), p("link", "view link (organization)", ["read"], { link_scope: "organization" })] },
+        { id: "e", path: "HR", folder: true, nesting: 1, state: "read", permissions: [owners, person("Dana Whitfield", ["owner"]), p("group", "HR Team", ["write"])] },
+        { id: "f", path: "HR/Reviews/2026 performance reviews for the Northwind Traders regional sales and customer service teams", folder: true, nesting: 2, state: "read", permissions: [person("Dana Whitfield", ["owner"])] },
+        { id: "g", path: "Legal/Supplier agreements", folder: true, nesting: 1, state: "refused", permissions: [] },
+        { id: "h", path: "Marketing/Launch plan.pptx", folder: false, nesting: 1, state: "read", permissions: [members, p("link", "edit link (users)", ["write"], { link_scope: "users" }), person("Tom Okafor", ["write"], { via_link: true, link_scope: "users" }), person("Priya Nair", ["write"], { via_link: true, link_scope: "users" })] },
+      ];
+      return { read_at: now - (refresh ? 0 : 3 * 3600), full, entries: full ? entries : entries.slice(0, 1).concat(entries.slice(3, 5)), refused: refresh ? 1 : 0 };
+    },
     async list_checkouts({ name }) { return JSON.parse(JSON.stringify(checkouts[name] || [])); },
     async check_file({ name, path }) { await wait(400); checkouts[name] = (checkouts[name] || []).filter((f) => f.path !== path); },
     async set_explorer({ name, enabled, label }) {
@@ -145,7 +167,7 @@
     async disconnect({ name }) { data.connections = data.connections.filter((c) => c.name !== name); },
     async open_connection() {},
     async open_logs() {},
-    async publish_seed() { await wait(700); return { items: 193422, bytes: 9400000, name: "seed-1.sqlite.gz", replaced: 1 }; },
+    async publish_seed() { await wait(700); return { items: 193422, withheld: 3, bytes: 9400000, name: "seed-1.sqlite.gz", replaced: 1 }; },
     async set_network({ address }) {
       const l = data.links.find((x) => x.address === address);
       data.link = l ? { chosen: true, address: l.address, name: l.name } : { chosen: false, address: "10.0.0.21", name: "Wi-Fi" };
@@ -158,6 +180,10 @@
       emit("sync-started", name);
       const pre = dryRun ? "would " : "";
       const lines = [
+        "stage: Asking the library what has changed",
+        "stage: Reading the library: 5,039 items so far",
+        "stage: Comparing the library with this computer: 212 of 4,880 changed items",
+        "stage: Looking for changes on this computer: 18,204 items checked (now in Finance/FY27)",
         `${pre}download Board/2026-11 minutes.docx (48211 bytes)`,
         `${pre}upload Budget/FY27 draft.xlsx (912004 bytes, changed here)`,
         `${pre}keep a local copy of Policies/Travel.docx (changed here and on the server)`,

@@ -50,6 +50,98 @@ pub struct RemoteItem {
     pub mtime_ns: Option<i64>,
     pub is_root: bool,
     pub deleted: bool,
+    /// The item has permissions of its own instead of taking them from its folder, so
+    /// some people who can open the library may not be able to open it. A seed leaves
+    /// such items, and everything inside them, out.
+    pub own_permissions: bool,
+}
+
+/// Who or what a permission is given to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrincipalKind {
+    /// One person, known by their directory identifier.
+    User,
+    /// A Microsoft 365 or security group, known by its directory identifier.
+    Group,
+    /// A SharePoint group of the site, such as its Members or Visitors. Who is in it
+    /// is kept by SharePoint, and DriveCraft cannot read that.
+    SiteGroup,
+    /// Someone known only to SharePoint, such as "Everyone except external users".
+    SiteUser,
+    /// A sharing link; anyone who has it may open the item, as far as its scope allows.
+    Link,
+    /// A program rather than a person.
+    Application,
+    Unknown,
+}
+
+impl PrincipalKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PrincipalKind::User => "user",
+            PrincipalKind::Group => "group",
+            PrincipalKind::SiteGroup => "site_group",
+            PrincipalKind::SiteUser => "site_user",
+            PrincipalKind::Link => "link",
+            PrincipalKind::Application => "application",
+            PrincipalKind::Unknown => "unknown",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "user" => PrincipalKind::User,
+            "group" => PrincipalKind::Group,
+            "site_group" => PrincipalKind::SiteGroup,
+            "site_user" => PrincipalKind::SiteUser,
+            "link" => PrincipalKind::Link,
+            "application" => PrincipalKind::Application,
+            _ => PrincipalKind::Unknown,
+        }
+    }
+    /// How the kind is said to people.
+    pub fn said(self) -> &'static str {
+        match self {
+            PrincipalKind::User => "person",
+            PrincipalKind::Group => "group",
+            PrincipalKind::SiteGroup => "SharePoint group",
+            PrincipalKind::SiteUser => "SharePoint",
+            PrincipalKind::Link => "sharing link",
+            PrincipalKind::Application => "app",
+            PrincipalKind::Unknown => "other",
+        }
+    }
+}
+
+/// One permission on one item: who has it and what they may do. A sharing link given
+/// to named people is recorded once for the link and once for each person.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct Permission {
+    /// The server's identifier of the permission (shared by a link and its people).
+    pub perm_id: String,
+    pub kind: PrincipalKind,
+    /// The directory or SharePoint identifier of the person or group, when given.
+    pub principal_id: Option<String>,
+    pub name: String,
+    pub email: Option<String>,
+    /// A SharePoint login name, when given.
+    pub login: Option<String>,
+    /// "read", "write", "owner" and the like.
+    pub roles: Vec<String>,
+    /// For a link: "anonymous", "organization", "users", "existingAccess".
+    pub link_scope: Option<String>,
+    /// Given through a sharing link rather than directly.
+    pub via_link: bool,
+}
+
+/// Who is signed in, as far as permissions are concerned.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Identity {
+    pub user_id: String,
+    pub name: String,
+    /// The directory groups the person belongs to, directly or through other groups.
+    /// `None` when the server would not say.
+    pub groups: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default)]
@@ -89,6 +181,9 @@ pub enum RemoteError {
     NotFound(String),
     #[error("not signed in, or the sign-in has expired: {0}")]
     Unauthorized(String),
+    /// The server knows the item but will not let the signed-in person have it.
+    #[error("access denied: {0}")]
+    Forbidden(String),
     #[error("{0}")]
     Other(String),
 }
@@ -156,6 +251,25 @@ pub trait Remote: Send + Sync {
         parent_id: &str,
         name: &str,
     ) -> impl Future<Output = RemoteResult<Option<RemoteItem>>> + Send;
+
+    /// One item by its identifier, as the signed-in person sees it. An item they may
+    /// not open is `NotFound` or `Forbidden`, depending on the server.
+    fn item(
+        &self,
+        drive_id: &str,
+        item_id: &str,
+    ) -> impl Future<Output = RemoteResult<RemoteItem>> + Send;
+
+    /// The permissions of several items, each with its own answer: an item whose
+    /// permissions the server will not show is `Forbidden` (or `NotFound`).
+    fn permissions(
+        &self,
+        drive_id: &str,
+        item_ids: &[String],
+    ) -> impl Future<Output = RemoteResult<Vec<(String, RemoteResult<Vec<Permission>>)>>> + Send;
+
+    /// Who is signed in, with their group memberships if the server will say.
+    fn identity(&self) -> impl Future<Output = RemoteResult<Identity>> + Send;
 
     /// Everything directly inside a folder.
     fn children(

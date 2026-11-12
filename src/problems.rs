@@ -106,6 +106,18 @@ pub enum Level {
     Notice,
 }
 
+/// What to show when the antivirus stopped a file from being read or written.
+pub const BLOCKED_BY_ANTIVIRUS: &str = "Blocked by your antivirus, which reports this file as harmful. \
+It was not transferred. Look at your antivirus's alerts to deal with it, and do not open the file.";
+
+/// A plainer way to say why a file failed, where the system's own words would
+/// alarm or confuse. Windows answers with error 225 or 226 when the antivirus
+/// refuses to let a file be opened.
+pub fn plain_reason(why: &str) -> Option<&'static str> {
+    let blocked = ["(os error 225)", "(os error 226)"].iter().any(|code| why.contains(code));
+    (cfg!(windows) && blocked).then_some(BLOCKED_BY_ANTIVIRUS)
+}
+
 /// One problem met during a run.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Problem {
@@ -290,6 +302,14 @@ impl Catalog {
 mod tests {
     use super::*;
     use crate::catalog::Mode;
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_the_antivirus_blocked_is_said_plainly() {
+        let windows = "Operation did not complete successfully because the file contains a virus or potentially unwanted software. (os error 225)";
+        assert_eq!(plain_reason(windows), Some(BLOCKED_BY_ANTIVIRUS));
+        assert_eq!(plain_reason("the file is open in another program (os error 32)"), None);
+    }
 
     fn p(kind: Kind, path: &str, watch: Option<&str>) -> Problem {
         Problem {

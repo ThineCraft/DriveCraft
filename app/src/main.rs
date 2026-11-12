@@ -524,6 +524,42 @@ async fn list_checkouts(name: String, ask_server: bool) -> Result<Vec<drivecraft
     .await
 }
 
+/// Who may open what in a library, as recorded; with `refresh`, read from the server
+/// again first. Read-only: nothing on the server is changed.
+#[derive(serde::Serialize)]
+struct PermissionsView {
+    #[serde(flatten)]
+    view: drivecraft::permissions::View,
+    /// Items whose permissions the server would not show, in the read just made.
+    refused: u64,
+}
+
+#[tauri::command]
+async fn library_permissions(app: AppHandle, name: String, refresh: bool) -> Result<PermissionsView, String> {
+    let shared = app.state::<Shared>();
+    // A read from the server writes to the catalog; it waits its turn with synchronizing.
+    let _turn = if refresh { Some(shared.gate.lock().await) } else { None };
+    local(move || async move {
+        let home = Home::locate()?;
+        let cat = home.catalog()?;
+        let c = cat.connection(&name)?.ok_or_else(|| anyhow!("no connection named '{name}'"))?;
+        let mut refused = 0;
+        if refresh {
+            let graph = home.graph()?;
+            let read = drivecraft::permissions::read_all(&cat, &graph, &c, |_, _| {}).await?;
+            refused = read.refused;
+            if let Ok(log) = RunLog::open(&home.dir) {
+                log.line(&format!(
+                    "read the permissions of {} items in {} ({} refused, full lists: {})",
+                    read.items, c.name, read.refused, read.full
+                ));
+            }
+        }
+        Ok(PermissionsView { view: drivecraft::permissions::view(&cat, &c)?, refused })
+    })
+    .await
+}
+
 /// Check a file of a library out or in, from the app's own list.
 #[tauri::command]
 async fn check_file(app: AppHandle, name: String, path: String, out: bool, comment: String) -> Result<(), String> {
@@ -976,7 +1012,10 @@ async fn publish_seed(app: AppHandle, name: String) -> Result<drivecraft::seed::
         let graph = drivecraft::graph::GraphClient::new(auth);
         let done = drivecraft::seed::publish(&cat, &graph, &conn, &home.work_dir()).await?;
         if let Ok(log) = RunLog::open(&home.dir) {
-            log.line(&format!("published a seed for {}: {} items, {} bytes", conn.name, done.items, done.bytes));
+            log.line(&format!(
+                "published a seed for {}: {} items, {} bytes; {} parts with permissions of their own left out",
+                conn.name, done.items, done.bytes, done.withheld
+            ));
         }
         Ok(done)
     })
@@ -1075,7 +1114,7 @@ async fn run_sync(app: AppHandle, name: String, opts: Options) -> Finished {
                 let send = |text: String| {
                     let _ = emitter.emit("sync-log", LogLine { name: name.clone(), line: text });
                 };
-                let matters = ["warning:", "failed:", "progress:", "network:", "pacing:", "read ", "scanned "]
+                let matters = ["stage:", "warning:", "failed:", "progress:", "network:", "pacing:", "read ", "scanned "]
                     .iter()
                     .any(|p| line.starts_with(p));
                 let mut s = shown.lock().unwrap();
@@ -1404,6 +1443,7 @@ fn main() {
             set_explorer,
             save_icon,
             list_checkouts,
+            library_permissions,
             check_file,
             file_details,
             save_details,

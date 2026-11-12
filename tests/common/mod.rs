@@ -3,7 +3,7 @@
 
 use drivecraft::quickxor::hash_bytes;
 use drivecraft::remote::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -24,6 +24,20 @@ struct State {
     expire_bookmarks: bool,
     refuse_bookmarks: bool,
     full_scans: u64,
+    /// Items with permissions of their own, and whether the ordinary user may open them.
+    protected: HashMap<String, bool>,
+    /// The server is answering an ordinary user rather than the library's owner.
+    as_user: bool,
+    /// Downloads the server refuses outright.
+    forbidden: HashSet<String>,
+    /// The permissions recorded on items, by identifier; the library's own under "root".
+    perms: HashMap<String, Vec<Permission>>,
+    /// Who the ordinary user is.
+    user: Identity,
+    /// Items whose permissions the server will not show, even to the owner.
+    perms_hidden: HashSet<String>,
+    /// How many single items have been asked about.
+    item_asks: u64,
 }
 
 pub struct FakeRemote {
@@ -51,6 +65,23 @@ impl State {
         Some(cur)
     }
 
+    /// Whether whoever is asking may see the item: the owner sees everything; an
+    /// ordinary user sees nothing inside a protected item they may not open.
+    fn visible(&self, id: &str) -> bool {
+        if !self.as_user {
+            return true;
+        }
+        let mut cur = Some(id.to_string());
+        for _ in 0..512 {
+            let Some(c) = cur else { return true };
+            if self.protected.get(&c) == Some(&false) {
+                return false;
+            }
+            cur = self.items.get(&c).and_then(|e| e.item.parent_id.clone());
+        }
+        true
+    }
+
     fn record(&mut self, id: &str) {
         let snap = self.items[id].item.clone();
         self.log.push(snap);
@@ -72,6 +103,7 @@ impl State {
             mtime_ns: Some(1_700_000_000_000_000_000 + v as i64 * 1_000_000_000),
             is_root: false,
             deleted: false,
+            own_permissions: false,
         };
         self.items.insert(id.clone(), Entry { item, content });
         self.record(&id);
@@ -131,6 +163,9 @@ impl State {
                 .collect();
             kids.sort_by(|a, b| a.item.name.cmp(&b.item.name));
             for k in kids {
+                if !self.visible(&k.item.id) {
+                    continue;
+                }
                 out.push(k.item.clone());
                 if k.item.kind == ItemKind::Folder {
                     queue.push(k.item.id.clone());
@@ -148,12 +183,46 @@ fn split(path: &str) -> (&str, &str) {
     }
 }
 
+/// A permission given to one person.
+pub fn person(id: &str, name: &str, role: &str) -> Permission {
+    Permission {
+        perm_id: format!("p-{id}"),
+        kind: PrincipalKind::User,
+        principal_id: Some(id.into()),
+        name: name.into(),
+        email: Some(format!("{}@contoso.com", name.split(' ').next().unwrap_or(name).to_lowercase())),
+        login: None,
+        roles: vec![role.into()],
+        link_scope: None,
+        via_link: false,
+    }
+}
+
+/// A permission given to a directory group.
+pub fn group(id: &str, name: &str, role: &str) -> Permission {
+    Permission { kind: PrincipalKind::Group, email: None, ..person(id, name, role) }
+}
+
+/// A permission given to one of the site's SharePoint groups.
+pub fn site_group(id: &str, name: &str, role: &str) -> Permission {
+    Permission { kind: PrincipalKind::SiteGroup, email: None, login: Some(name.into()), ..person(id, name, role) }
+}
+
 impl FakeRemote {
     pub fn new() -> Self {
         let mut st = State {
             page_size: 1000,
+            user: Identity {
+                user_id: "alex-id".into(),
+                name: "Alex Morgan".into(),
+                groups: Some(vec!["sales-team".into()]),
+            },
             ..Default::default()
         };
+        st.perms.insert(
+            "root".into(),
+            vec![site_group("3", "Contoso Owners", "owner"), site_group("5", "Contoso Members", "write")],
+        );
         st.items.insert(
             "root".into(),
             Entry {
@@ -169,6 +238,7 @@ impl FakeRemote {
                     mtime_ns: None,
                     is_root: true,
                     deleted: false,
+                    own_permissions: false,
                 },
                 content: vec![],
             },
@@ -278,6 +348,70 @@ impl FakeRemote {
         self.st.lock().unwrap().full_scans
     }
 
+    /// Give an item permissions of its own. `user_may_open` says whether the ordinary
+    /// user is among those allowed to open it.
+    pub fn protect(&self, path: &str, user_may_open: bool) {
+        let mut st = self.st.lock().unwrap();
+        let id = st.resolve(path).expect("exists");
+        let v = st.bump();
+        let e = st.items.get_mut(&id).unwrap();
+        e.item.own_permissions = true;
+        e.item.etag = Some(format!("e{v}"));
+        st.protected.insert(id.clone(), user_may_open);
+        st.record(&id);
+    }
+
+    /// The ordinary user is given access to a protected item; the change feed then
+    /// mentions it to them.
+    pub fn grant(&self, path: &str) {
+        let mut st = self.st.lock().unwrap();
+        let id = st.resolve(path).expect("exists");
+        st.protected.insert(id.clone(), true);
+        st.record(&id);
+    }
+
+    /// Record who may open an item, as the server would list it to an owner.
+    pub fn set_permissions(&self, path: &str, perms: Vec<Permission>) {
+        let mut st = self.st.lock().unwrap();
+        let id = if path.is_empty() { "root".to_string() } else { st.resolve(path).expect("exists") };
+        st.perms.insert(id, perms);
+    }
+
+    /// The server will not show this item's permissions to anyone.
+    pub fn hide_permissions(&self, path: &str) {
+        let mut st = self.st.lock().unwrap();
+        let id = st.resolve(path).expect("exists");
+        st.perms_hidden.insert(id);
+    }
+
+    /// Who the ordinary user is, and the groups the server says they are in.
+    pub fn set_user(&self, user_id: &str, groups: Option<Vec<&str>>) {
+        let mut st = self.st.lock().unwrap();
+        st.user.user_id = user_id.into();
+        st.user.groups = groups.map(|g| g.into_iter().map(String::from).collect());
+    }
+
+    /// How many single items have been asked about, one by one.
+    pub fn item_asks(&self) -> u64 {
+        self.st.lock().unwrap().item_asks
+    }
+
+    /// From now on the server answers as an ordinary user, or as the owner.
+    pub fn as_user(&self, user: bool) {
+        self.st.lock().unwrap().as_user = user;
+    }
+
+    /// Refuse to hand out a file's content (HTTP 403), or stop refusing.
+    pub fn forbid_download(&self, path: &str, refuse: bool) {
+        let mut st = self.st.lock().unwrap();
+        let id = st.resolve(path).expect("exists");
+        if refuse {
+            st.forbidden.insert(id);
+        } else {
+            st.forbidden.remove(&id);
+        }
+    }
+
     pub fn expire_bookmarks(&self) {
         self.st.lock().unwrap().expire_bookmarks = true;
     }
@@ -305,8 +439,13 @@ impl Remote for FakeRemote {
                     return Err(RemoteError::Other("access denied: this bookmark belongs to someone else".into()));
                 }
                 let from: usize = l[2..].parse().unwrap();
+                let items = st.log[from..]
+                    .iter()
+                    .filter(|it| it.deleted || st.visible(&it.id))
+                    .cloned()
+                    .collect();
                 return Ok(DeltaPage {
-                    items: st.log[from..].to_vec(),
+                    items,
                     next_link: None,
                     delta_link: Some(format!("L:{}", st.log.len())),
                 });
@@ -335,6 +474,12 @@ impl Remote for FakeRemote {
         let content = {
             let mut st = self.st.lock().unwrap();
             st.downloads += 1;
+            if st.forbidden.contains(item_id) {
+                return Err(RemoteError::Forbidden(item_id.into()));
+            }
+            if !st.visible(item_id) {
+                return Err(RemoteError::NotFound(item_id.into()));
+            }
             st.items
                 .get(item_id)
                 .ok_or_else(|| RemoteError::NotFound(item_id.into()))?
@@ -440,12 +585,63 @@ impl Remote for FakeRemote {
         Ok(st.child(parent_id, name).map(|id| st.items[&id].item.clone()))
     }
 
+    async fn item(&self, _drive: &str, item_id: &str) -> RemoteResult<RemoteItem> {
+        let mut st = self.st.lock().unwrap();
+        st.item_asks += 1;
+        match st.items.get(item_id) {
+            Some(e) if st.visible(item_id) => Ok(e.item.clone()),
+            _ => Err(RemoteError::NotFound(item_id.into())),
+        }
+    }
+
+    async fn permissions(
+        &self,
+        _drive: &str,
+        item_ids: &[String],
+    ) -> RemoteResult<Vec<(String, RemoteResult<Vec<Permission>>)>> {
+        let st = self.st.lock().unwrap();
+        Ok(item_ids
+            .iter()
+            .map(|id| {
+                let key = if st.items.get(id).is_some_and(|e| e.item.is_root) { "root" } else { id.as_str() };
+                let answer = if !st.items.contains_key(id) || !st.visible(id) {
+                    Err(RemoteError::NotFound(id.clone()))
+                } else if st.perms_hidden.contains(id) {
+                    Err(RemoteError::Forbidden(id.clone()))
+                } else {
+                    let all = st.perms.get(key).cloned().unwrap_or_default();
+                    // Someone who is not an owner sees only what applies to them.
+                    Ok(if st.as_user {
+                        all.into_iter()
+                            .filter(|p| p.principal_id.as_deref() == Some(st.user.user_id.as_str()))
+                            .collect()
+                    } else {
+                        all
+                    })
+                };
+                (id.clone(), answer)
+            })
+            .collect())
+    }
+
+    async fn identity(&self) -> RemoteResult<Identity> {
+        let st = self.st.lock().unwrap();
+        Ok(if st.as_user {
+            st.user.clone()
+        } else {
+            Identity { user_id: "owner-id".into(), name: "Library Owner".into(), groups: Some(vec![]) }
+        })
+    }
+
     async fn children(&self, _drive: &str, parent_id: &str) -> RemoteResult<Vec<RemoteItem>> {
         let st = self.st.lock().unwrap();
+        if !st.items.contains_key(parent_id) || !st.visible(parent_id) {
+            return Err(RemoteError::NotFound(parent_id.into()));
+        }
         Ok(st
             .items
             .values()
-            .filter(|e| e.item.parent_id.as_deref() == Some(parent_id))
+            .filter(|e| e.item.parent_id.as_deref() == Some(parent_id) && st.visible(&e.item.id))
             .map(|e| e.item.clone())
             .collect())
     }
