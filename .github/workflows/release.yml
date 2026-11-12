@@ -55,6 +55,12 @@ jobs:
       - name: Build the command-line program
         run: cargo build --release -p drivecraft --locked
 
+      # Earlier builds are reused to save time, and they can bring old installers
+      # with them. Only the installer made by this run may be published.
+      - name: Remove installers from earlier builds
+        shell: pwsh
+        run: Remove-Item target/release/bundle -Recurse -Force -ErrorAction SilentlyContinue
+
       - name: Build the desktop app and pack the installer
         working-directory: app
         run: npx --yes @tauri-apps/cli@2.12.4 build
@@ -63,9 +69,11 @@ jobs:
         id: installer
         shell: pwsh
         run: |
-          $file = Get-ChildItem target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
-          if (-not $file) { throw "no installer was produced" }
           $version = (Get-Content app/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $found = @(Get-ChildItem target/release/bundle/nsis/*-setup.exe)
+          if ($found.Count -ne 1) { throw "expected one installer, found $($found.Count): $($found.Name -join ', ')" }
+          $file = $found[0]
+          if ($file.Name -notlike "*_${version}_*") { throw "the installer $($file.Name) is not version $version" }
           $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()
           "$hash  $($file.Name)" | Set-Content -Encoding ascii "$($file.FullName).sha256"
           "path=$($file.FullName -replace '\\','/')" >> $env:GITHUB_OUTPUT
@@ -95,4 +103,14 @@ jobs:
         run: |
           $tag = "v${{ steps.installer.outputs.version }}"
           $notes = "Installer built by GitHub from commit ${{ github.sha }}.`n`nCheck where it came from:`n`n    gh attestation verify ${{ steps.installer.outputs.name }} --repo ${{ github.repository }}`n`nIt is not signed with a Windows code-signing certificate, so Windows will ask before running it."
-          gh release create $tag "${{ steps.installer.outputs.path }}" "${{ steps.installer.outputs.path }}.sha256" --draft --target "${{ github.sha }}" --title "DriveCraft ${{ steps.installer.outputs.version }}" --notes $notes
+          $files = @("${{ steps.installer.outputs.path }}", "${{ steps.installer.outputs.path }}.sha256")
+          $existing = gh release view $tag --json isDraft --jq .isDraft 2>$null
+          if ($existing -eq "true") {
+            # A draft of this version already exists: replace its files and notes.
+            gh release upload $tag @files --clobber
+            gh release edit $tag --target "${{ github.sha }}" --notes $notes
+          } elseif ($existing) {
+            throw "$tag is already published; raise the version before building again"
+          } else {
+            gh release create $tag @files --draft --target "${{ github.sha }}" --title "DriveCraft ${{ steps.installer.outputs.version }}" --notes $notes
+          }
