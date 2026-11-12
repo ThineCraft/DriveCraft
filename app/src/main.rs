@@ -1378,23 +1378,101 @@ const LEAVE_ARG: &str = "--uninstall-cleanup";
 /// the browser's Sync button, the folders listed in File Explorer and their
 /// right-click menu, and starting with Windows. Files, the catalog, the sign-in
 /// and the logs are not touched. Each step is attempted whatever the others do.
+///
+/// What was switched on is written down first. An upgrade removes the old version
+/// before installing the new one, and the new one puts it all back when it starts
+/// (see `put_back_left_on`).
 fn leave_as_found() {
     let exe = std::env::current_exe().unwrap_or_default();
+    let name = exe.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     if let Ok(home) = Home::locate() {
-        let _ = drivecraft::takeover::give_back(&sync_button_backup(&home));
-        if let Ok(conns) = home.catalog().and_then(|c| c.connections()) {
-            for c in conns {
-                let _ = drivecraft::explorer::turn_off(&c);
-            }
+        let backup = sync_button_backup(&home);
+        let conns = home.catalog().and_then(|c| c.connections()).unwrap_or_default();
+        let left = drivecraft::left_on::LeftOn {
+            explorer: drivecraft::explorer::shown()
+                .into_iter()
+                .filter(|s| conns.iter().any(|c| same_folder(&c.local_path, &s.folder)))
+                .map(|s| drivecraft::left_on::Listed { folder: s.folder, name: s.name, icon: s.icon })
+                .collect(),
+            sync_button: drivecraft::takeover::status(&backup).ours,
+            start_with_windows: drivecraft::takeover::starts_with_windows("DriveCraft", &name),
+        };
+        let written = drivecraft::left_on::write(&home.dir, &left);
+        let _ = drivecraft::takeover::give_back(&backup);
+        for c in &conns {
+            let _ = drivecraft::explorer::turn_off(c);
         }
         if let Ok(log) = RunLog::open(&home.dir) {
             log.line("DriveCraft is being removed: gave back the Sync button and File Explorer");
+            match written {
+                Ok(()) if !left.is_empty() => log.line(&format!(
+                    "wrote down what was switched on, to put back after an upgrade: {} folder(s) in File Explorer, Sync button {}, start with Windows {}",
+                    left.explorer.len(),
+                    if left.sync_button { "yes" } else { "no" },
+                    if left.start_with_windows { "yes" } else { "no" },
+                )),
+                Ok(()) => {}
+                Err(e) => log.line(&format!("could not write down what was switched on: {e:#}")),
+            }
         }
     }
     let _ = drivecraft::explorer::set_menu(&exe, &[]);
-    let name = exe.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     if !name.is_empty() {
         drivecraft::takeover::remove_startup("DriveCraft", &name);
+    }
+}
+
+/// After an upgrade (or a reinstall), put back what was switched on when DriveCraft
+/// was last removed: starting with Windows, the Sync button, and its folders in File
+/// Explorer with their names and icons. Then forget the record.
+async fn put_back_left_on(app: AppHandle) {
+    // Everything that touches the data folder happens before the first wait.
+    let found = (|| {
+        let home = Home::locate().ok()?;
+        let left = drivecraft::left_on::read(&home.dir)?;
+        let conns = home.catalog().and_then(|c| c.connections()).unwrap_or_default();
+        let folders: Vec<(String, String, String)> = left
+            .explorer
+            .iter()
+            .filter_map(|l| {
+                conns
+                    .iter()
+                    .find(|c| same_folder(&c.local_path, &l.folder) && c.local_path.is_dir())
+                    .map(|c| (c.name.clone(), l.name.clone(), l.icon.clone()))
+            })
+            .collect();
+        Some((home.dir.clone(), sync_button_backup(&home), left, folders))
+    })();
+    let Some((dir, backup, left, folders)) = found else { return };
+
+    let mut said = Vec::new();
+    if left.start_with_windows {
+        use tauri_plugin_autostart::ManagerExt;
+        said.push(match app.autolaunch().enable() {
+            Ok(()) => "started with Windows again".to_string(),
+            Err(e) => format!("could not start with Windows again: {e}"),
+        });
+    }
+    if left.sync_button {
+        let took = std::env::current_exe().map_err(anyhow::Error::from).and_then(|exe| drivecraft::takeover::take(&exe, &backup));
+        said.push(match took {
+            Ok(()) => "took the Sync button again".to_string(),
+            Err(e) => format!("could not take the Sync button again: {e:#}"),
+        });
+    }
+    let mut listed = 0;
+    for (conn, label, icon) in &folders {
+        match set_explorer(app.clone(), conn.clone(), true, Some(label.clone()), Some(icon.clone())).await {
+            Ok(_) => listed += 1,
+            Err(e) => said.push(format!("could not list {conn} in File Explorer again: {e}")),
+        }
+    }
+    if !left.explorer.is_empty() {
+        said.push(format!("listed {listed} of {} folder(s) in File Explorer again", left.explorer.len()));
+    }
+    drivecraft::left_on::forget(&dir);
+    if let Ok(log) = RunLog::open(&dir) {
+        log.line(&format!("put back what was switched on before the upgrade: {}", said.join("; ")));
     }
 }
 
@@ -1519,6 +1597,8 @@ fn main() {
                 }
             });
             watch_folders(app.handle().clone());
+            // Just upgraded: put back what the old version's removal took away.
+            tauri::async_runtime::spawn(put_back_left_on(app.handle().clone()));
             {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {

@@ -17,6 +17,7 @@ pub mod synclink;
 pub mod sysinfo;
 pub mod takeover;
 pub mod home;
+pub mod left_on;
 pub mod runlog;
 pub mod net;
 pub mod pace;

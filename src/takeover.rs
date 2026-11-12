@@ -101,6 +101,9 @@ mod imp {
         anyhow::bail!("not available on this system")
     }
     pub fn remove_startup(_: &str, _: &str) {}
+    pub fn startup_command(_: &str) -> Option<String> {
+        None
+    }
 }
 
 #[cfg(windows)]
@@ -237,10 +240,11 @@ mod imp {
         Ok(())
     }
 
-    /// Remove the "start with Windows" entry called `name`, if it starts `program`.
-    pub fn remove_startup(name: &str, program: &str) {
-        use windows::Win32::System::Registry::{RegDeleteKeyValueW, RegGetValueW, RRF_RT_REG_SZ};
-        const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+    const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+
+    /// The command of the "start with Windows" entry called `name`, if there is one.
+    pub fn startup_command(name: &str) -> Option<String> {
+        use windows::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
         unsafe {
             let mut data = vec![0u16; 2048];
             let mut len = (data.len() * 2) as u32;
@@ -254,11 +258,18 @@ mod imp {
                 Some(&mut len),
             );
             if got != ERROR_SUCCESS {
-                return;
+                return None;
             }
-            let command = String::from_utf16_lossy(&data[..(len as usize / 2)]).to_lowercase();
-            // Only ever an entry that is DriveCraft's own.
-            if command.contains(&program.to_lowercase()) {
+            Some(String::from_utf16_lossy(&data[..(len as usize / 2)]).trim_end_matches('\0').to_string())
+        }
+    }
+
+    /// Remove the "start with Windows" entry called `name`, if it starts `program`.
+    pub fn remove_startup(name: &str, program: &str) {
+        use windows::Win32::System::Registry::RegDeleteKeyValueW;
+        // Only ever an entry that is DriveCraft's own.
+        if super::starts(startup_command(name).as_deref(), program) {
+            unsafe {
                 let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, PCWSTR(wide(RUN).as_ptr()), PCWSTR(wide(name).as_ptr()));
             }
         }
@@ -318,6 +329,16 @@ pub fn remove_startup(name: &str, program: &str) {
     imp::remove_startup(name, program)
 }
 
+/// True when the "start with Windows" entry called `name` starts `program`.
+pub fn starts_with_windows(name: &str, program: &str) -> bool {
+    starts(imp::startup_command(name).as_deref(), program)
+}
+
+/// Whether a startup command runs `program` (a file name such as "drivecraft-app.exe").
+fn starts(command: Option<&str>, program: &str) -> bool {
+    !program.is_empty() && command.is_some_and(|c| c.to_lowercase().contains(&program.to_lowercase()))
+}
+
 /// Keep DriveCraft's entry pointing at where the program is now.
 pub fn refresh(app: &Path) -> Result<()> {
     if imp::is_ours() {
@@ -344,6 +365,16 @@ mod tests {
 
     fn text(s: &str) -> Vec<u8> {
         s.encode_utf16().chain(Some(0)).flat_map(|c| c.to_le_bytes()).collect()
+    }
+
+    #[test]
+    fn a_startup_entry_counts_only_when_it_starts_drivecraft() {
+        let ours = r#""C:\Users\alex\AppData\Local\DriveCraft\drivecraft-app.exe" --hidden"#;
+        assert!(starts(Some(ours), "drivecraft-app.exe"));
+        assert!(starts(Some(&ours.to_uppercase()), "drivecraft-app.exe"));
+        assert!(!starts(Some(r#""C:\Program Files\Other\other.exe""#), "drivecraft-app.exe"));
+        assert!(!starts(None, "drivecraft-app.exe"));
+        assert!(!starts(Some(ours), ""));
     }
 
     #[test]
