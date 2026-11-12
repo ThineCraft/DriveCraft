@@ -67,7 +67,7 @@ impl Home {
         let text = std::fs::read_to_string(self.config_path()).map_err(|_| {
             anyhow!(
                 "DriveCraft has not been set up yet. It needs the application ID of its app registration.\n\
-                 See getting-started.html for how to create one."
+                 See https://drive.thinecraft.io/setup.html for how to create one."
             )
         })?;
         Ok(serde_json::from_str(&text)?)

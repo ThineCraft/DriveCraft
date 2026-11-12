@@ -480,6 +480,9 @@ select.on { border-color: var(--blue); color: var(--blue-soft-ink); font-weight:
 
 .brand-link { font: inherit; color: inherit; letter-spacing: inherit; border-radius: 6px; padding: 0 .1rem; margin: 0 -.1rem; }
 .brand-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.setup-guide { margin: -.25rem 0 .25rem; }
+.textlink { font: inherit; color: var(--blue-soft-ink); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; border-radius: 4px; }
+.textlink:hover { color: var(--text); }
 .progress { margin-top: 1.1rem; padding: .95rem 1.1rem; border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--line)); border-radius: var(--radius); background: color-mix(in srgb, var(--blue) 7%, var(--bed-2)); }
 .progress.stuck { border-color: var(--warn-line); background: var(--warn-bg); }
 .progress.stuck .progress-left .ic, .progress.stuck #progress-until { color: var(--amber-ink); }

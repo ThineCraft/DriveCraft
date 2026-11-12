@@ -84,7 +84,7 @@
       problems[name] = (problems[name] || []).filter((p) => !p.lasting || (kind && !(p.kind === kind && p.path === path)));
     },
     async show_problem() {},
-    async open_site() {},
+    async open_site() {},  // also takes { page: "setup" }
     async pick_library_file() { return "C:\\Work\\Northwind\\Finance\\FY27\\Budget model.xlsx"; },
     async take_details_request() { return null; },
     async open_in_library() {},

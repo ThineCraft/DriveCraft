@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Set up DriveCraft · DriveCraft</title>
+  <meta name="description" content="How to create the app registration DriveCraft signs in with, once per organization, in the Microsoft Entra admin center.">
+  <link rel="canonical" href="https://drive.thinecraft.io/setup.html">
+  <link rel="stylesheet" href="/styles.css?v=2026-11-12b">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/site.js" defer></script>
+</head>
+<body style="--accent:#79b8ff">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="https://thinecraft.io">ThineCraft</a>
+    <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="project-navigation">Projects</button>
+    <nav id="project-navigation" class="project-nav" aria-label="ThineCraft projects" data-open="false"><a href="https://thinecraft.io">ThineCraft</a><a href="https://share.thinecraft.io">ShareCraft</a><a href="https://drive.thinecraft.io" aria-current="page">DriveCraft</a><a href="https://team.thinecraft.io">TeamCraft</a><a href="https://gantt.thinecraft.io">GanttCraft</a><a href="https://flow.thinecraft.io">FlowCraft</a><a href="https://show.thinecraft.io">ShowCraft</a><a href="https://form.thinecraft.io">FormCraft</a><a href="https://cloud.thinecraft.io">CloudCraft</a></nav>
+  </header>
+  <main id="main">
+    <section class="policy section-shell" aria-labelledby="setup-title">
+      <p class="section-kicker"><a href="/">DriveCraft</a></p>
+      <h1 id="setup-title">Set up DriveCraft</h1>
+      <p class="policy-lead">Microsoft 365 only lets a registered application sign people in. Before anyone in your organization can use DriveCraft, someone creates its app registration, once. It takes about five minutes.</p>
+      <p class="policy-status"><strong>Who does this:</strong> someone who may create app registrations in your Microsoft 365 organization, usually an administrator. Everyone else only needs the two IDs it produces; they are not secret.</p>
+
+      <h2>1. Create the registration</h2>
+      <ol class="steps">
+        <li>Sign in to the <a href="https://entra.microsoft.com">Microsoft Entra admin center</a> and open <strong>App registrations</strong> (search for it at the top of the page if you cannot see it).</li>
+        <li>Choose <strong>New registration</strong>.</li>
+        <li><strong>Name:</strong> <code>DriveCraft</code>.</li>
+        <li><strong>Supported account types:</strong> <em>Accounts in this organizational directory only</em>.</li>
+        <li><strong>Redirect URI:</strong> choose the platform <em>Public client/native (mobile &amp; desktop)</em> and enter <code>http://localhost</code>.</li>
+        <li>Choose <strong>Register</strong>.</li>
+        <li>On the overview page, copy the <strong>Application (client) ID</strong> and the <strong>Directory (tenant) ID</strong>.</li>
+      </ol>
+
+      <h2>2. Add the permissions</h2>
+      <p>Open <strong>API permissions</strong>, choose <strong>Add a permission</strong>, then <strong>Microsoft Graph</strong>, then <strong>Delegated permissions</strong>, and add these five:</p>
+      <table class="policy-table">
+        <thead><tr><th scope="col">Permission</th><th scope="col">What DriveCraft uses it for</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><code>Files.Read.All</code></th><td>Reading libraries, for a read-only sign-in.</td></tr>
+          <tr><th scope="row"><code>Files.ReadWrite.All</code></th><td>Uploading, changing and deleting files, for two-way sync and uploads.</td></tr>
+          <tr><th scope="row"><code>Sites.Read.All</code></th><td>Finding SharePoint sites and libraries, and reading who may open what.</td></tr>
+          <tr><th scope="row"><code>User.Read</code></th><td>Showing who is signed in.</td></tr>
+          <tr><th scope="row"><code>offline_access</code></th><td>Staying signed in between runs.</td></tr>
+        </tbody>
+      </table>
+      <p>If your organization does not let people approve apps for themselves, an administrator then chooses <strong>Grant admin consent</strong> on the same page. Doing it anyway saves everyone a consent prompt.</p>
+      <p>Optional: to sign in with a code on another device from the command line, open <strong>Authentication</strong> and set <strong>Allow public client flows</strong> to <em>Yes</em>.</p>
+
+      <h2>3. Tell DriveCraft</h2>
+      <p>Start DriveCraft. On the <strong>Set up DriveCraft</strong> screen, paste the Application (client) ID and the Directory (tenant) ID, then choose <strong>Save</strong>. Give the same two IDs to everyone else in your organization who will use it.</p>
+      <p>From the command line instead:</p>
+      <pre><code>drivecraft setup --client-id APPLICATION-ID --tenant TENANT-ID</code></pre>
+
+      <h2>What this allows</h2>
+      <ul>
+        <li>These are <strong>delegated</strong> permissions: DriveCraft acts as the person who signs in, and reaches only what that person can already reach.</li>
+        <li>The registration holds no password or secret, and DriveCraft has no access of its own.</li>
+        <li>It is your organization's registration. To stop DriveCraft signing anyone in, open <strong>Enterprise applications</strong>, choose DriveCraft, and under <strong>Properties</strong> set <em>Enabled for users to sign in</em> to <em>No</em>, or delete the registration.</li>
+      </ul>
+      <p class="policy-links"><a href="https://github.com/ThineCraft/DriveCraft/releases/latest">Download for Windows <span aria-hidden="true">↗</span></a> <a href="/code-signing.html">Code signing policy</a></p>
+    </section>
+  </main>
+  <footer><span>DriveCraft</span><span><a href="/code-signing.html">Code signing policy</a> · <a href="https://github.com/ThineCraft/DriveCraft/blob/main/LICENSE">MIT License</a> · Part of the ThineCraft ecosystem.</span></footer>
+</body>
+</html>

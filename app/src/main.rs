@@ -1028,10 +1028,16 @@ async fn publish_seed(app: AppHandle, name: String) -> Result<drivecraft::seed::
     .await
 }
 
-/// Open DriveCraft's web site in the browser. The address is fixed here.
+/// Open DriveCraft's web site in the browser. The addresses are fixed here; the
+/// page only picks one of them.
 #[tauri::command]
-fn open_site() -> Result<(), String> {
-    open::that("https://drive.thinecraft.io").map_err(|e| e.to_string())
+fn open_site(page: Option<String>) -> Result<(), String> {
+    let url = match page.as_deref() {
+        None => "https://drive.thinecraft.io",
+        Some("setup") => "https://drive.thinecraft.io/setup.html",
+        Some(other) => return Err(format!("Unknown page: {other}")),
+    };
+    open::that(url).map_err(|e| e.to_string())
 }
 
 /// Open the folder that holds DriveCraft's log files.

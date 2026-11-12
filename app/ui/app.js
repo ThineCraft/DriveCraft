@@ -1933,6 +1933,7 @@ listen("sync-progress", (ev) => {
   if (ev.payload.name === selected) renderProgress();
 });
 $("brand-link").addEventListener("click", () => invoke("open_site").catch(toast));
+$("setup-guide").addEventListener("click", () => invoke("open_site", { page: "setup" }).catch(toast));
 listen("notice", (ev) => {
   // Inside an open dialog a toast would be hidden behind it.
   if (checkoutsFor) { if (!ev.payload.good) checkoutsError(ev.payload.text); }
