@@ -307,7 +307,7 @@ fn files(n: u64) -> String {
 const STAGE_EVERY: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// A count with thousands separated, as people read them.
-fn count(n: u64) -> String {
+pub(crate) fn count(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, d) in digits.chars().enumerate() {

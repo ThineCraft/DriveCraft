@@ -539,6 +539,7 @@ async fn library_permissions(app: AppHandle, name: String, refresh: bool) -> Res
     let shared = app.state::<Shared>();
     // A read from the server writes to the catalog; it waits its turn with synchronizing.
     let _turn = if refresh { Some(shared.gate.lock().await) } else { None };
+    let app = app.clone();
     local(move || async move {
         let home = Home::locate()?;
         let cat = home.catalog()?;
@@ -546,7 +547,12 @@ async fn library_permissions(app: AppHandle, name: String, refresh: bool) -> Res
         let mut refused = 0;
         if refresh {
             let graph = home.graph()?;
-            let read = drivecraft::permissions::read_all(&cat, &graph, &c, |_, _| {}).await?;
+            // Reading a large library takes minutes; the dialog shows how far it has got.
+            let (teller, about) = (app.clone(), c.name.clone());
+            let read = drivecraft::permissions::read_all(&cat, &graph, &c, move |what| {
+                let _ = teller.emit("permissions-progress", LogLine { name: about.clone(), line: what.to_string() });
+            })
+            .await?;
             refused = read.refused;
             if let Ok(log) = RunLog::open(&home.dir) {
                 log.line(&format!(

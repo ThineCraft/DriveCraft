@@ -150,7 +150,7 @@ impl Catalog {
              WITH RECURSIVE sub(id) AS (
                SELECT ?2
                UNION
-               SELECT r.id FROM remote_items r JOIN sub ON r.conn_id = ?1 AND r.parent_id = sub.id
+               SELECT r.id FROM remote_items r INDEXED BY remote_by_parent JOIN sub ON r.conn_id = ?1 AND r.parent_id = sub.id
              )
              SELECT id FROM sub",
             params![conn_id, root_id],
@@ -272,16 +272,29 @@ pub struct ReadOutcome {
 
 /// Read the whole library's list from the start and record which items have
 /// permissions of their own. Nothing else in the catalog changes, and the bookmark
-/// this read ends with is not kept.
-pub async fn survey<R: Remote>(cat: &Catalog, remote: &R, conn: &Connection) -> Result<()> {
+/// this read ends with is not kept. On a large library this takes minutes, so
+/// `progress` hears, in plain words, how far it has got.
+pub async fn survey<R: Remote>(
+    cat: &Catalog,
+    remote: &R,
+    conn: &Connection,
+    progress: &dyn Fn(&str),
+) -> Result<()> {
     cat.begin_permission_survey(conn.id)?;
     let mut link: Option<String> = None;
+    let mut seen = 0u64;
+    progress("Reading the library's list to find what has permissions of its own");
     loop {
         let page = remote
             .delta(&conn.drive_id, link.as_deref())
             .await
             .context("reading the library to find what has permissions of its own")?;
         cat.record_permissions(conn.id, &page.items)?;
+        seen += page.items.len() as u64;
+        progress(&format!(
+            "Reading the library's list to find what has permissions of its own: {} items so far",
+            crate::engine::count(seen)
+        ));
         if page.delta_link.is_some() {
             break;
         }
@@ -294,19 +307,20 @@ pub async fn survey<R: Remote>(cat: &Catalog, remote: &R, conn: &Connection) -> 
 }
 
 /// Read, from the server, the permissions of the library and of every item that has
-/// permissions of its own, and keep them. `progress` hears (done, total).
+/// permissions of its own, and keep them. `progress` hears, in plain words, what is
+/// being read and how far it has got.
 pub async fn read_all<R: Remote>(
     cat: &Catalog,
     remote: &R,
     conn: &Connection,
-    progress: impl Fn(u64, u64),
+    progress: impl Fn(&str),
 ) -> Result<ReadOutcome> {
     let conn = cat.connection_by_id(conn.id)?;
     if conn.delta_link.is_none() {
         bail!("this library has not been fully scanned on this computer yet; synchronize it first");
     }
     if !conn.perms_known {
-        survey(cat, remote, &conn).await?;
+        survey(cat, remote, &conn, &progress).await?;
     }
     let root = cat
         .remote_root(conn.id)?
@@ -314,6 +328,7 @@ pub async fn read_all<R: Remote>(
     let ids = cat.permission_item_ids(conn.id)?;
     let total = ids.len() as u64;
     cat.clear_permissions(conn.id)?;
+    progress("Reading who may open the library");
     let (mut done, mut refused, mut full) = (0u64, 0u64, false);
     for chunk in ids.chunks(READ_STEP) {
         let answers = remote
@@ -337,7 +352,13 @@ pub async fn read_all<R: Remote>(
             }
             done += 1;
         }
-        progress(done, total);
+        if total > 1 {
+            progress(&format!(
+                "Reading who may open each one: {} of {} folders and files with permissions of their own",
+                crate::engine::count(done.saturating_sub(1)),
+                crate::engine::count(total - 1)
+            ));
+        }
     }
     cat.set_permissions_read(conn.id, crate::problems::unix_now(), full)?;
     Ok(ReadOutcome { items: total, refused, full })

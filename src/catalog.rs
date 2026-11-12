@@ -485,7 +485,10 @@ impl Catalog {
         Ok(self
             .db
             .prepare_cached(&format!(
-                "SELECT {REMOTE_COLS} FROM remote_items
+                // The index is named outright. Left to choose, SQLite reads every row
+                // of the library for each name asked about: 60 ms a file at 200,000
+                // files, which made checking a large folder take most of an hour.
+                "SELECT {REMOTE_COLS} FROM remote_items INDEXED BY remote_by_parent
                  WHERE conn_id = ? AND parent_id = ? AND name = ? COLLATE NOCASE AND deleted = 0"
             ))?
             .query_row(params![conn_id, parent_id, name], remote_from_row)
@@ -915,7 +918,7 @@ impl Catalog {
                        SELECT id FROM remote_items
                        WHERE conn_id = ?1 AND deleted = 0 AND is_root = 0 AND {restricted}
                        UNION
-                       SELECT r.id FROM remote_items r JOIN hidden h ON r.conn_id = ?1 AND r.parent_id = h.id
+                       SELECT r.id FROM remote_items r INDEXED BY remote_by_parent JOIN hidden h ON r.conn_id = ?1 AND r.parent_id = h.id
                        WHERE r.deleted = 0
                      )
                      SELECT id FROM hidden"
@@ -1267,6 +1270,18 @@ mod tests {
         assert_eq!(cat.remote_path(conn.id, &o).unwrap(), None);
         assert_eq!(cat.connection("lib").unwrap().unwrap().delta_link.as_deref(), Some("link1"));
         assert!(cat.remote_child(conn.id, "root", "alpha").unwrap().is_some());
+        // Finding a name in a folder must go by the index, never by reading the
+        // whole library: it is asked once for every new file.
+        let plan: String = cat
+            .db
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT id FROM remote_items INDEXED BY remote_by_parent
+                 WHERE conn_id = ? AND parent_id = ? AND name = ? COLLATE NOCASE AND deleted = 0",
+                params![conn.id, "root", "alpha"],
+                |r| r.get(3),
+            )
+            .unwrap();
+        assert!(plan.contains("remote_by_parent (conn_id=? AND parent_id=? AND name=?)"), "{plan}");
     }
 
     #[test]

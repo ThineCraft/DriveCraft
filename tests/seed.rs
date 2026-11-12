@@ -452,7 +452,7 @@ async fn the_permissions_view_lists_who_has_what_and_finds_people_and_names() {
     let admin = Machine::new(Mode::Archive);
     admin.sync(&remote).await;
     let conn = admin.cat.connection("lib").unwrap().unwrap();
-    let read = drivecraft::permissions::read_all(&admin.cat, &remote, &conn, |_, _| {}).await.unwrap();
+    let read = drivecraft::permissions::read_all(&admin.cat, &remote, &conn, |_| {}).await.unwrap();
     assert_eq!((read.items, read.refused, read.full), (6, 0, true));
 
     let view = drivecraft::permissions::view(&admin.cat, &conn).unwrap();

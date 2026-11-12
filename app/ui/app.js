@@ -1458,10 +1458,11 @@ $("bin-sync").addEventListener("click", () => {
 // so it shows at once however large the library is; Refresh reads it from the
 // server again. Every search and filter runs here, on what is already shown.
 let permsFor = null;
+let permsReading = null;
 let permsData = null;
 let permsShown = 150;
 const PERM_ROLES = { owner: "Full control", write: "Can edit", read: "Can view" };
-const PERM_KINDS = { user: "person", group: "group", site_group: "SharePoint group", site_user: "SharePoint", link: "sharing link", application: "app", unknown: "other" };
+const PERM_KINDS = { user: "person", group: "directory group", site_group: "SharePoint group", site_user: "SharePoint", link: "sharing link", application: "app", unknown: "other" };
 function permsError(e) {
   $("perms-error").textContent = e ? String(e) : "";
   $("perms-error").hidden = !e;
@@ -1497,6 +1498,7 @@ function permsMatch(e, f) {
 async function permsLoad(name, refresh) {
   const button = $("perms-reload");
   button.disabled = true;
+  permsReading = refresh ? name : null;
   if (refresh) $("perms-status").textContent = "Reading permissions from the library…";
   try {
     const data = await invoke("library_permissions", { name, refresh });
@@ -1509,8 +1511,13 @@ async function permsLoad(name, refresh) {
       : e);
   }
   button.disabled = false;
+  if (permsReading === name) permsReading = null;
   if (permsFor === name) renderPerms();
 }
+// While permissions are being read, the core says how far it has got.
+listen("permissions-progress", (ev) => {
+  if (ev.payload.name === permsFor && permsReading === permsFor) $("perms-status").textContent = `${ev.payload.line}…`;
+});
 function renderPerms() {
   const box = $("perms-list");
   const data = permsData;
@@ -1527,7 +1534,7 @@ function renderPerms() {
   let status;
   if (!data.read_at) status = "Permissions have not been read for this library yet. Refresh reads them from the library.";
   else if (own.length === 0) status = "Nothing in this library has permissions of its own: everything takes the library’s.";
-  else if (found.length === own.length) status = `${own.length.toLocaleString()} ${own.length === 1 ? "folder or file has" : "folders and files have"} permissions of their own`;
+  else if (found.length === own.length) status = own.length === 1 ? "1 folder or file has permissions of its own" : `${own.length.toLocaleString()} folders and files have permissions of their own`;
   else status = `${found.length.toLocaleString()} of ${own.length.toLocaleString()} match`;
   $("perms-status").textContent = status;
   // Searching for a person: say that groups they are in are not resolved here.

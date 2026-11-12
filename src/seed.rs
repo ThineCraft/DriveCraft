@@ -124,7 +124,7 @@ pub async fn publish<R: Remote>(
         // of their own (or it came from a seed). Without that, the seed could show
         // everyone the names of things only some may open, so read the library's
         // list once more, noting only that.
-        crate::permissions::survey(cat, remote, &conn).await?;
+        crate::permissions::survey(cat, remote, &conn, &|_| {}).await?;
         conn = cat.connection_by_id(conn.id)?;
     }
     // Bring the bookmark up to this moment first. Otherwise the seed would carry a
@@ -163,7 +163,7 @@ pub async fn publish<R: Remote>(
     // Who may open each restricted item, read now with the publisher's sign-in. Only
     // an owner sees everyone's permissions; anyone else would record lists that leave
     // people out, so then restricted items are left out of the seed instead.
-    let note = match crate::permissions::read_all(cat, remote, &conn, |_, _| {}).await {
+    let note = match crate::permissions::read_all(cat, remote, &conn, |_| {}).await {
         Ok(read) if read.full => None,
         Ok(_) => Some(
             "You are not an owner of this library, so the server shows you only the permissions that apply to you. Folders and files with permissions of their own were left out of the seed instead."

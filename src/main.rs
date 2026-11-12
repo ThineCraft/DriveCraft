@@ -584,9 +584,12 @@ async fn run(cli: Cli) -> Result<bool> {
                 auth.current().await.ok_or_else(|| anyhow!("not signed in. Run: drivecraft login"))?;
                 let graph = GraphClient::new(auth);
                 println!("Reading permissions from the library...");
-                let read = drivecraft::permissions::read_all(&cat, &graph, &conn, |done, total| {
-                    if total > 50 {
-                        println!("  {done} of {total} items");
+                // A line every few seconds is enough to show it is alive.
+                let said = std::cell::Cell::new(None::<std::time::Instant>);
+                let read = drivecraft::permissions::read_all(&cat, &graph, &conn, |what| {
+                    if said.get().is_none_or(|t| t.elapsed().as_secs() >= 5) {
+                        said.set(Some(std::time::Instant::now()));
+                        println!("  {what}");
                     }
                 })
                 .await?;
