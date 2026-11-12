@@ -4,11 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DriveCraft · ThineCraft</title>
-  <meta name="description" content="DriveCraft is an open-source sync client for SharePoint and OneDrive for work: two-way sync, download-only archives and one-way uploads, built for very large libraries. A working prototype for Windows.">
+  <meta name="description" content="DriveCraft is an open-source sync client for SharePoint and OneDrive for work: two-way sync, download-only archives and one-way uploads, a view of who may open what, and room for very large libraries. A working prototype for Windows.">
   <link rel="canonical" href="https://drive.thinecraft.io/">
   <link rel="stylesheet" href="/styles.css">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <script src="/site.js" defer></script>
+  <script src="/lightbox.js" defer></script>
 </head>
 <body style="--accent:#79b8ff">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -21,7 +22,7 @@
     <section class="hero hero-with-shot">
       <div class="hero-copy">
         <p class="eyebrow">Open-source sync for SharePoint and OneDrive for work</p>
-        <h1>Keep every file in reach—and under your control.</h1>
+        <h1>Keep every file in reach and under your control.</h1>
         <p class="lede">DriveCraft keeps SharePoint document libraries and OneDrive for work in step with folders on your computer. It is built for libraries far larger than the usual clients are comfortable with, and it tells you plainly what it is doing.</p>
         <aside class="status" aria-label="Project status">
           <strong>Working prototype for Windows</strong>
@@ -30,13 +31,13 @@
         <p class="cta-row"><a class="button" href="https://github.com/ThineCraft/DriveCraft">Get the source <span aria-hidden="true">↗</span></a><a class="button quiet" href="#today">See what works</a></p>
       </div>
       <figure class="hero-shot">
-        <img src="/screens/running.png" width="2168" height="1530" alt="The DriveCraft window during a large download: a two-way library called Northwind, an estimate of 3 hours and 14 minutes with the speed of the last hour drawn behind it, and notes that three problems need attention and two files are checked out.">
+        <a class="zoom" href="/screens/running.png" data-title="A long run, explained as it goes" data-caption="DriveCraft says what it is doing, with counts, and estimates the time left from the speed of the last hour."><img src="/screens/running.png" width="2168" height="1530" alt="The DriveCraft window during a large download: a two-way library called Northwind, an estimate of 3 hours and 14 minutes with the speed of the last hour drawn behind it, and notes that three problems need attention and two files are checked out."><span class="zoom-hint" aria-hidden="true">View larger</span><span class="visually-hidden"> (opens a larger view)</span></a>
       </figure>
     </section>
     <section class="thesis-section section-shell" aria-labelledby="thesis-title">
       <p class="section-kicker">The proposition</p>
-      <h2 id="thesis-title">Built to remain understandable—and yours.</h2>
-      <p>Most people still use SharePoint like a shared drive. DriveCraft meets them there: files stay whole on disk, every change is previewed and logged, and anything it alters on your computer can be put back with one switch.</p>
+      <h2 id="thesis-title">Built to stay understandable, and yours.</h2>
+      <p>Most people still use SharePoint like a shared drive. DriveCraft meets them there: files stay whole on disk, every run can be previewed and is logged, and anything it alters on your computer can be put back with one switch.</p>
     </section>
     <section class="capabilities section-shell" id="today" aria-labelledby="capabilities-title">
       <div class="section-heading">
@@ -52,37 +53,62 @@
     <span class="feature-index">02</span>
     <p class="feature-label">Large libraries</p>
     <h3>No file-count ceiling</h3>
-    <p>A catalog on your computer tracks every file, so there is no fixed limit to hit. DriveCraft paces itself to what the server will accept instead of being thrown back. Tested by uploading a 200,000-file, 286 GB library with no failed files.</p>
+    <p>A catalog on your computer tracks every file, so there is no fixed limit to hit. DriveCraft paces itself to what the server will accept instead of being thrown back. A long run says what it is doing, with counts and the folder it is in, and estimates the time left from the speed of the last hour.</p>
   </article><article class="feature-card">
     <span class="feature-index">03</span>
     <p class="feature-label">Nothing by surprise</p>
     <h3>Preview, then act</h3>
     <p>Preview any run before it happens. Large deletions wait for your confirmation. A file changed in both places is never overwritten: your version is kept beside the library’s.</p>
+  </article><article class="feature-card proof" aria-labelledby="proof-title">
+    <span class="feature-index">04</span>
+    <p class="feature-label">Tested at scale</p>
+    <h3 id="proof-title">The 200,000-file test passed.</h3>
+    <dl class="proof-figures">
+      <div><dt>Files uploaded</dt><dd>199,994</dd></div>
+      <div><dt>Data uploaded</dt><dd>286.5 GB</dd></div>
+      <div><dt>Failed files</dt><dd>None</dd></div>
+      <div><dt>Asked to slow down</dt><dd>19 <small>times in 201,067 requests</small></dd></div>
+    </dl>
+    <p>The computer restarted in the middle of the run, and DriveCraft carried on from where it had stopped. This test was an upload; syncing a library that large down to a computer is still to be proven.</p>
+  </article><article class="feature-card">
+    <span class="feature-index">05</span>
+    <p class="feature-label">The first scan, once</p>
+    <h3>Seeds that respect permissions</h3>
+    <p>An owner can publish a seed into the library, so other computers skip the slow first scan of a very large library. Each computer then removes what its own user may not open, and asks the library where the seed cannot settle it. So far this is tested against a stand-in server, not yet with a second real user.</p>
+  </article><article class="feature-card">
+    <span class="feature-index">06</span>
+    <p class="feature-label">No false alarms</p>
+    <h3>Skipped, not failed</h3>
+    <p>A file you may not open is skipped quietly instead of failing on every run, and is picked up again once you are given access. A file your antivirus blocks is reported in plain words, with what to do about it.</p>
   </article></div>
 
       <div class="shots">
+      <figure class="shot lead">
+        <a class="zoom" href="/screens/permissions.png"><img src="/screens/permissions.png" width="2168" height="1530" alt="The Permissions dialog for the Northwind library, searched for Maria Santos: the library’s own groups, then the Board folder and a Confidential minutes folder inside it, each with its own list of people and groups and what each may do. Her name is highlighted wherever it appears." loading="lazy"><span class="zoom-hint" aria-hidden="true">View larger</span><span class="visually-hidden"> (opens a larger view)</span></a>
+        <figcaption><p class="shot-new">New</p><h3>See who may open what</h3><p>SharePoint has no single view of a library’s permissions. DriveCraft shows the library’s own permissions, then every folder or file that has permissions of its own, with each person or group and what they may do. Search by folder, file or person to see where someone has access. It only reads: permissions are still changed in SharePoint.</p></figcaption>
+      </figure>
       <figure class="shot">
-        <img src="/screens/recycle-bin.png" width="2168" height="1530" alt="The recycle bin view, searched for the word budget and limited to the last 7 days, showing ten matches with two ticked and a button to restore 2 items." loading="lazy">
+        <a class="zoom" href="/screens/recycle-bin.png"><img src="/screens/recycle-bin.png" width="2168" height="1530" alt="The recycle bin view, searched for the word budget and limited to the last 7 days, showing ten matches with two ticked and a button to restore 2 items." loading="lazy"><span class="zoom-hint" aria-hidden="true">View larger</span><span class="visually-hidden"> (opens a larger view)</span></a>
         <figcaption><h3>Find a deleted file in seconds</h3><p>Search the library’s recycle bin by any part of the name, the folder, or who deleted it. Filter by date, person and kind of file, then restore one item or several.</p></figcaption>
       </figure>
       <figure class="shot">
-        <img src="/screens/problems.png" width="2168" height="1530" alt="The problems view for a library, grouped into files that could not be transferred, a version kept as a copy, a file that was not uploaded, and a long path notice." loading="lazy">
+        <a class="zoom" href="/screens/problems.png"><img src="/screens/problems.png" width="2168" height="1530" alt="The problems view for a library, grouped into files that could not be transferred, a version kept as a copy, a file that was not uploaded, and a long path notice." loading="lazy"><span class="zoom-hint" aria-hidden="true">View larger</span><span class="visually-hidden"> (opens a larger view)</span></a>
         <figcaption><h3>Problems you can act on</h3><p>Every file that could not be synchronized is listed with the reason and what to do. A problem clears itself once it is fixed; nothing is hidden in a log.</p></figcaption>
       </figure>
       <figure class="shot">
-        <img src="/screens/details.png" width="2168" height="1530" alt="The file details panel for Budget model.xlsx, with fields for title, department, approval status, regions, review date and page count." loading="lazy">
+        <a class="zoom" href="/screens/details.png"><img src="/screens/details.png" width="2168" height="1530" alt="The file details panel for Budget model.xlsx, with fields for title, department, approval status, regions, review date and page count." loading="lazy"><span class="zoom-hint" aria-hidden="true">View larger</span><span class="visually-hidden"> (opens a larger view)</span></a>
         <figcaption><h3>Library details, where you work</h3><p>See and change a file’s library columns, the metadata most people never use because it lives only in the SharePoint web pages, straight from a right-click.</p></figcaption>
       </figure>
       <figure class="shot">
-        <img src="/screens/sync-button.png" width="2168" height="1530" alt="The Connect a library form opened from the browser, already filled in for the Documents library of a Finance Team site, with a button to use OneDrive for this one instead." loading="lazy">
+        <a class="zoom" href="/screens/sync-button.png"><img src="/screens/sync-button.png" width="2168" height="1530" alt="The Connect a library form opened from the browser, already filled in for the Documents library of a Finance Team site, with a button to use OneDrive for this one instead." loading="lazy"><span class="zoom-hint" aria-hidden="true">View larger</span><span class="visually-hidden"> (opens a larger view)</span></a>
         <figcaption><h3>Take over the Sync button, reversibly</h3><p>Pressing Sync in the browser can open DriveCraft with the form filled in. Nothing connects until you say so, and one switch hands the button back to OneDrive exactly as it was.</p></figcaption>
       </figure>
       <figure class="shot">
-        <img src="/screens/icons.png" width="2168" height="1530" alt="The icon picker, showing a grid of amber icons with a balance-scale icon chosen." loading="lazy">
+        <a class="zoom" href="/screens/icons.png"><img src="/screens/icons.png" width="2168" height="1530" alt="The icon picker, showing a grid of amber icons with a balance-scale icon chosen." loading="lazy"><span class="zoom-hint" aria-hidden="true">View larger</span><span class="visually-hidden"> (opens a larger view)</span></a>
         <figcaption><h3>At home in File Explorer</h3><p>Status icons beside every file, Check out and Check in on right-click, and a name and icon of your choosing for each library’s folder, from 1,421 bundled icons.</p></figcaption>
       </figure>
       <figure class="shot">
-        <img src="/screens/library-light.png" width="2168" height="1530" alt="The DriveCraft window in its light theme, showing a download-only archive library." loading="lazy">
+        <a class="zoom" href="/screens/library-light.png"><img src="/screens/library-light.png" width="2168" height="1530" alt="The DriveCraft window in its light theme, showing a download-only archive library." loading="lazy"><span class="zoom-hint" aria-hidden="true">View larger</span><span class="visually-hidden"> (opens a larger view)</span></a>
         <figcaption><h3>Light, dark, or follow the system</h3><p>One calm window that lives in the system tray. With many libraries the list becomes searchable, and a run shows an estimate instead of a guess.</p></figcaption>
       </figure>
       </div>
@@ -90,7 +116,7 @@
     <section class="sequence-section section-shell" aria-labelledby="sequence-title">
       <div>
         <p class="section-kicker">Still ahead</p>
-        <h2 id="sequence-title">What is not built yet.</h2>
+        <h2 id="sequence-title">What is not built, or not yet proven.</h2>
       </div>
       <ol><li>
     <span>01</span>
@@ -104,6 +130,9 @@
   </li><li>
     <span>04</span>
     <strong>A code-signed installer and sign-in with the Windows login</strong>
+  </li><li>
+    <span>05</span>
+    <strong>Proof that a very large library syncs down as well: the big test was an upload</strong>
   </li></ol>
     </section>
     <section class="ecosystem section-shell" aria-labelledby="ecosystem-title">
