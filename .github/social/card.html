@@ -1,0 +1,64 @@
+<!doctype html>
+<!--
+  The picture shown when a link to drive.thinecraft.io is shared (Open Graph and
+  X cards). It is drawn at exactly 1200 x 630 and saved as docs/social-card.png by
+  render.mjs in this folder:  node .github/social/render.mjs
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DriveCraft social card</title>
+<style>
+  :root { --accent: #79b8ff; --ink: #f5f1e7; --soft: #c6c2b7; --muted: #8f8c84; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    position: relative;
+    font-family: Inter, ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(circle at 78% 8%, #79b8ff2e, transparent 430px),
+      radial-gradient(circle at 8% 100%, #c27a3222, transparent 380px),
+      linear-gradient(135deg, #090d12, #0d131a 58%, #090d12);
+  }
+  body::before {
+    position: absolute; inset: 0; content: "";
+    background-image: linear-gradient(#ffffff09 1px, transparent 1px), linear-gradient(90deg, #ffffff09 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: linear-gradient(to bottom right, black, transparent 85%);
+  }
+  .copy { position: absolute; left: 72px; top: 64px; bottom: 60px; width: 560px; display: flex; flex-direction: column; }
+  .brand { display: flex; align-items: center; gap: 18px; }
+  .mark { width: 64px; height: 64px; flex: none; }
+  .name { font-size: 40px; font-weight: 850; letter-spacing: -.05em; line-height: 1; }
+  .by { margin-top: 6px; color: var(--muted); font-size: 17px; font-weight: 600; letter-spacing: .01em; }
+  .eyebrow { margin: 54px 0 0; color: var(--accent); font-size: 15px; font-weight: 850; letter-spacing: .16em; text-transform: uppercase; }
+  h1 { margin: 16px 0 0; font-size: 58px; font-weight: 850; letter-spacing: -.055em; line-height: .98; }
+  .modes { display: flex; gap: 10px; margin-top: auto; }
+  .modes span { padding: 9px 15px; border: 1px solid #79b8ff55; border-radius: 999px; background: #79b8ff12; color: var(--ink); font-size: 18px; font-weight: 700; }
+  .foot { display: flex; align-items: center; gap: 14px; margin-top: 22px; color: var(--soft); font-size: 19px; font-weight: 600; }
+  .foot b { color: var(--accent); font-weight: 800; }
+  .foot i { width: 5px; height: 5px; border-radius: 50%; background: #ffffff40; }
+  .shot {
+    position: absolute; left: 676px; top: 92px; width: 760px;
+    border: 1px solid #ffffff2a; border-radius: 18px;
+    box-shadow: 0 40px 110px #000c, 0 0 90px #79b8ff26;
+  }
+  .shot-fade { position: absolute; inset: auto 0 0 600px; height: 120px; background: linear-gradient(to bottom, transparent, #0b1016); }
+</style>
+</head>
+<body>
+  <img class="shot" src="../../docs/screens/running.png" alt="">
+  <div class="shot-fade"></div>
+  <div class="copy">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#0b0f14" stroke="#ffffff22"/><path d="M13 13h38v38H13z" fill="none" stroke="#79b8ff" stroke-width="3"/><text x="32" y="41" text-anchor="middle" font-family="system-ui, Segoe UI, sans-serif" font-size="28" font-weight="800" fill="#f4f1e8">D</text></svg>
+      <div><div class="name">DriveCraft</div><div class="by">by ThineCraft · open source</div></div>
+    </div>
+    <p class="eyebrow">Sync for SharePoint and OneDrive for work</p>
+    <h1>Keep every file in reach and under your control.</h1>
+    <div class="modes"><span>Two-way sync</span><span>Archive</span><span>Ingest</span></div>
+    <div class="foot"><b>drive.thinecraft.io</b><i></i><span>Windows</span><i></i><span>MIT License</span></div>
+  </div>
+</body>
+</html>
