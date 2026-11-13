@@ -12,7 +12,7 @@
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
   const data = {
-    version: "0.1.0",
+    version: "0.1.1",
     data_dir: "C:\\Users\\you\\AppData\\Local\\ThineCraft\\DriveCraft\\data",
     setup: view === "setup" ? null : { client_id: "a8a192b4-0000-0000-0000-000000000000", tenant: "organizations" },
     signed_in: view !== "setup" && view !== "signin",
