@@ -6,7 +6,7 @@
   <title>Code signing policy · DriveCraft</title>
   <meta name="description" content="How DriveCraft installers for Windows are built, signed and checked, who approves each release, and what the program sends over the network.">
   <link rel="canonical" href="https://drive.thinecraft.io/code-signing.html">
-  <link rel="stylesheet" href="/styles.css?v=2026-11-12b">
+  <link rel="stylesheet" href="/styles.css?v=2026-11-13">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <script src="/site.js" defer></script>
 </head>
@@ -62,7 +62,7 @@
       <h2>Checking a download</h2>
       <p>Each installer comes with a SHA-256 checksum, and GitHub signs a record of the repository, commit and workflow that built it. With the <a href="https://cli.github.com">GitHub command-line tool</a>, anyone can check it:</p>
       <pre><code>gh attestation verify DriveCraft_&lt;version&gt;_x64-setup.exe --repo ThineCraft/DriveCraft</code></pre>
-      <p class="policy-links"><a href="https://github.com/ThineCraft/DriveCraft/releases/latest">Downloads <span aria-hidden="true">↗</span></a> <a href="https://github.com/ThineCraft/DriveCraft">Source on GitHub <span aria-hidden="true">↗</span></a></p>
+      <p class="policy-links"><a href="/#download">Download for Windows</a> <a href="https://github.com/ThineCraft/DriveCraft">Source on GitHub <span aria-hidden="true">↗</span></a></p>
     </section>
   </main>
   <footer><span>DriveCraft</span><span><a href="/code-signing.html">Code signing policy</a> · <a href="https://github.com/ThineCraft/DriveCraft/blob/main/LICENSE">MIT License</a> · Part of the ThineCraft ecosystem.</span></footer>

@@ -6,7 +6,7 @@
   <title>DriveCraft · ThineCraft</title>
   <meta name="description" content="DriveCraft is an open-source sync client for SharePoint and OneDrive for work: two-way sync, download-only archives and one-way uploads, a view of who may open what, and room for very large libraries. A working prototype for Windows.">
   <link rel="canonical" href="https://drive.thinecraft.io/">
-  <link rel="stylesheet" href="/styles.css?v=2026-11-12b">
+  <link rel="stylesheet" href="/styles.css?v=2026-11-13">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <script src="/site.js" defer></script>
   <script src="/lightbox.js?v=2026-11-12" defer></script>
@@ -28,7 +28,7 @@
           <strong>Working prototype for Windows</strong>
           <span>Everything shown on this page runs today. Try it on a test library first: it is not finished, and the installer is not yet code-signed.</span>
         </aside>
-        <p class="cta-row"><a class="button" href="https://github.com/ThineCraft/DriveCraft">Get the source <span aria-hidden="true">↗</span></a><a class="button quiet" href="#today">See what works</a></p>
+        <p class="cta-row"><a class="button" href="#download">Download for Windows</a><a class="button quiet" href="https://github.com/ThineCraft/DriveCraft">Get the source <span aria-hidden="true">↗</span></a></p>
       </div>
       <figure class="hero-shot">
         <a class="zoom" href="/screens/running.png" data-title="A long run, explained as it goes" data-caption="DriveCraft says what it is doing, with counts, and estimates the time left from the speed of the last hour."><img src="/screens/running.png" width="2168" height="1530" alt="The DriveCraft window during a large download: a two-way library called Northwind, an estimate of 3 hours and 14 minutes with the speed of the last hour drawn behind it, and notes that three problems need attention and two files are checked out."><span class="zoom-hint" aria-hidden="true">View larger</span><span class="visually-hidden"> (opens a larger view)</span></a>
@@ -182,12 +182,20 @@
     <i aria-hidden="true">↗</i>
   </a></div>
     </section>
-    <section class="source-cta section-shell">
-      <p class="section-kicker">Open from the beginning</p>
-      <h2>The source and the conversation belong in public.</h2>
-      <p>DriveCraft is written in Rust and developed in the open. The repository holds the code, the scope, and a guide to setting it up; installers are built by GitHub from that source.</p>
-      <div class="cta-links"><a href="https://github.com/ThineCraft/DriveCraft/releases/latest">Download for Windows <span aria-hidden="true">↗</span></a><a href="https://github.com/ThineCraft/DriveCraft">View on GitHub <span aria-hidden="true">↗</span></a></div>
-      <p class="cta-note">An early prototype for trying on test libraries. <a href="/setup.html">Set up DriveCraft</a> · <a href="/code-signing.html">Code signing policy</a></p>
+    <section class="source-cta section-shell" id="download" aria-labelledby="download-title">
+      <p class="section-kicker">Download</p>
+      <h2 id="download-title">Try it on a test library.</h2>
+      <p>DriveCraft is written in Rust and developed in the open. Every installer is built by GitHub from the public source, and the latest one is kept here too, so it can be downloaded where GitHub cannot be reached. It is an early prototype: try it on test libraries, not on production data.</p>
+      <!-- latest-installer:start -->
+      <p class="download-version">DriveCraft 0.1.1 for Windows · 8.7 MB</p>
+      <div class="cta-links"><a class="download-main" href="/download/DriveCraft_0.1.1_x64-setup.exe" download>Download DriveCraft 0.1.1</a><a href="https://github.com/ThineCraft/DriveCraft">Get the source <span aria-hidden="true">↗</span></a></div>
+      <ul class="download-facts">
+        <li>Installs for your Windows account only; no administrator rights needed. <a href="/setup.html">Set up DriveCraft</a> for your organization first.</li>
+        <li>Not yet signed with a code-signing certificate, so Windows asks before running it: choose <strong>More info</strong>, then <strong>Run anyway</strong>. <a href="/code-signing.html">Code signing policy</a></li>
+        <li>SHA-256 <code class="download-hash">ecf8ce41b3df67d4643d00d95680c77165b6639fa54f38ca9e715c2961023591</code></li>
+        <li>The same file is on <a href="https://github.com/ThineCraft/DriveCraft/releases/tag/v0.1.1">GitHub</a>, with the record of how GitHub built it.</li>
+      </ul>
+      <!-- latest-installer:end -->
     </section>
   </main>
   <footer><span>DriveCraft</span><span><a href="/code-signing.html">Code signing policy</a> · <a href="https://github.com/ThineCraft/DriveCraft/blob/main/LICENSE">MIT License</a> · Part of the ThineCraft ecosystem. Icons in the app by Font Awesome Free (CC BY 4.0).</span></footer>

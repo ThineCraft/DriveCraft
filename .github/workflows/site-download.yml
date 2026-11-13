@@ -1,0 +1,95 @@
+# Keeps the website's download in step with the latest release.
+#
+# drive.thinecraft.io keeps a copy of the latest installer, for networks that
+# cannot download from GitHub. Whenever a release is published as the latest,
+# this:
+#
+#   1. downloads its installer and checksum from the release;
+#   2. checks the installer against the checksum, and checks GitHub's signed record
+#      that it was built by this repository's release workflow;
+#   3. puts it in docs/download/ in place of the previous one, and updates the
+#      download section of the home page (.github/scripts/site_download.py);
+#   4. commits that to main and asks GitHub Pages to publish the site.
+#
+# It can also be run by hand (Actions > Website download > Run workflow) to put
+# the current latest release on the site.
+#
+# Publishing a release from another workflow does not start this one (GitHub does
+# not let one workflow's token start another); releases are published by a person.
+
+name: Website download
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write       # to commit the installer to docs/
+  pages: write          # to ask GitHub Pages to publish
+  attestations: read    # to check where the installer came from
+
+concurrency:
+  group: website-download
+  cancel-in-progress: false
+
+jobs:
+  website:
+    name: Put the latest installer on the website
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Run the script's tests
+        run: python3 -m unittest discover -s .github/scripts
+
+      - name: Find the latest release
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)
+          if [ "${{ github.event_name }}" = "release" ] && [ "${{ github.event.release.tag_name }}" != "$tag" ]; then
+            echo "Release ${{ github.event.release.tag_name }} is not the latest ($tag); the website keeps $tag."
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download and check the installer
+        id: installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir="$RUNNER_TEMP/release"
+          gh release download "${{ steps.latest.outputs.tag }}" --pattern "*-setup.exe" --pattern "*-setup.exe.sha256" --dir "$dir"
+          count=$(ls "$dir"/*-setup.exe | wc -l)
+          [ "$count" -eq 1 ] || { echo "expected one installer in the release, found $count"; exit 1; }
+          file=$(ls "$dir"/*-setup.exe)
+          # The checksum file was written on Windows; compare the hash itself.
+          want=$(tr -d '\r' < "$file.sha256" | awk '{print tolower($1)}')
+          have=$(sha256sum "$file" | awk '{print $1}')
+          [ "$want" = "$have" ] || { echo "checksum does not match: $have, expected $want"; exit 1; }
+          gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml"
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+
+      - name: Put it on the website
+        run: python3 .github/scripts/site_download.py "${{ steps.installer.outputs.file }}" "${{ steps.latest.outputs.version }}" docs
+
+      - name: Commit and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git add docs/download docs/index.html
+          if git diff --cached --quiet; then
+            echo "The website already has DriveCraft ${{ steps.latest.outputs.version }}."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Website: download DriveCraft ${{ steps.latest.outputs.version }}"
+          git push origin HEAD:main
+          # A push made with this workflow's token may not start a Pages build by itself.
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/pages/builds" || echo "Could not request a Pages build; it will publish with the next push."
