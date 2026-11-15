@@ -40,6 +40,10 @@ pub struct AppConfig {
     pub client_id: String,
     /// A tenant ID or domain, or `organizations` for any work or school account.
     pub tenant: String,
+    /// The organization's address as typed on the sign-in screen, such as
+    /// `contoso.sharepoint.com`, when the tenant was found from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

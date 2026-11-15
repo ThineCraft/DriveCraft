@@ -9,6 +9,7 @@ fn app() -> AppConfig {
     AppConfig {
         client_id: "client-123".into(),
         tenant: "organizations".into(),
+        address: None,
     }
 }
 

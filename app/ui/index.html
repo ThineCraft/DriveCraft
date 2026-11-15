@@ -72,12 +72,12 @@
     </div>
   </header>
 
-  <!-- First run: the app registration -->
+  <!-- The app registration, typed in by hand (from the menu, or "Enter the details by hand") -->
   <main class="center" id="view-setup" hidden>
     <form class="bed card" id="setup-form">
-      <h1>Set up DriveCraft</h1>
-      <p class="muted">Microsoft 365 only lets a registered application sign people in. Enter the details of the DriveCraft app registration in your organization. Your administrator can give you these.</p>
-      <p class="setup-guide"><button type="button" class="textlink" id="setup-guide" title="Opens drive.thinecraft.io/setup.html in your browser">How to create the app registration <span aria-hidden="true">↗</span></button></p>
+      <h1>App registration</h1>
+      <p class="muted">The DriveCraft app registration in your organization, typed in by hand. Usually you only need your organization's address on the sign-in screen and the registration ID from your administrator.</p>
+      <p class="setup-guide"><button type="button" class="textlink" id="setup-guide" title="Opens drive.thinecraft.io/setup.html in your browser">How to register DriveCraft <span aria-hidden="true">↗</span></button></p>
       <label>Application (client) ID
         <input id="setup-client" required autocomplete="off" spellcheck="false" placeholder="00000000-0000-0000-0000-000000000000">
       </label>
@@ -86,18 +86,29 @@
       </label>
       <p class="error" id="setup-error" hidden></p>
       <div class="actions">
-        <button type="button" class="btn quiet" id="setup-cancel" hidden>Cancel</button>
+        <button type="button" class="btn quiet" id="setup-cancel">Cancel</button>
         <button class="btn primary">Save</button>
       </div>
     </form>
   </main>
 
-  <!-- Not signed in -->
+  <!-- Not signed in: the first screen DriveCraft shows -->
   <main class="center" id="view-signin" hidden>
-    <div class="bed card">
+    <form class="bed card" id="signin-form" novalidate>
       <h1>Sign in</h1>
       <p class="muted">DriveCraft signs in as you, in your browser, and can reach only what you can already reach. It never sees your password.</p>
-      <div class="choice-list">
+      <label>Your organization's address
+        <input id="signin-address" autocomplete="url" spellcheck="false" placeholder="contoso.sharepoint.com">
+      </label>
+      <p class="muted small hint" id="signin-kind">A SharePoint address, like contoso.sharepoint.com, or a ShareCraft one, like contoso.sharecraft.io.</p>
+      <div id="signin-registration" hidden>
+        <label>DriveCraft registration ID
+          <input id="signin-client" autocomplete="off" spellcheck="false" placeholder="00000000-0000-0000-0000-000000000000">
+        </label>
+        <p class="muted small hint">Your Microsoft 365 administrator registers DriveCraft once for the organization and gives you this ID. <button type="button" class="textlink" id="signin-guide" title="Opens drive.thinecraft.io/setup.html in your browser">How to register DriveCraft <span aria-hidden="true">↗</span></button></p>
+      </div>
+      <p class="banner small" id="signin-sharecraft" hidden></p>
+      <div class="choice-list" id="signin-access">
         <label class="choice">
           <input type="radio" name="access" value="read" checked>
           <span><strong>Read only</strong><br><span class="muted">DriveCraft can download but cannot change anything in Microsoft 365. Best for a first look.</span></span>
@@ -110,10 +121,10 @@
       <p class="error" id="signin-error" hidden></p>
       <p class="muted small" id="signin-wait" hidden>Waiting for you to finish signing in in your browser…</p>
       <div class="actions">
-        <button class="btn quiet" id="signin-setup">App registration…</button>
+        <button type="button" class="btn quiet" id="signin-setup">Enter the details by hand…</button>
         <button class="btn primary" id="signin-button">Sign in with your browser</button>
       </div>
-    </div>
+    </form>
   </main>
 
   <!-- Main: the platform -->

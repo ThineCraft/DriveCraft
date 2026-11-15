@@ -41,13 +41,13 @@
 
       <h2>1. Create the registration</h2>
       <ol class="steps">
-        <li>Sign in to the <a href="https://entra.microsoft.com">Microsoft Entra admin center</a> and open <strong>App registrations</strong> (search for it at the top of the page if you cannot see it).</li>
+        <li>Sign in to the <a href="https://entra.microsoft.com" target="_blank" rel="noopener">Microsoft Entra admin center</a> and open <strong>App registrations</strong> (search for it at the top of the page if you cannot see it).</li>
         <li>Choose <strong>New registration</strong>.</li>
         <li><strong>Name:</strong> <code>DriveCraft</code>.</li>
         <li><strong>Supported account types:</strong> <em>Accounts in this organizational directory only</em>.</li>
         <li><strong>Redirect URI:</strong> choose the platform <em>Public client/native (mobile &amp; desktop)</em> and enter <code>http://localhost</code>.</li>
         <li>Choose <strong>Register</strong>.</li>
-        <li>On the overview page, copy the <strong>Application (client) ID</strong> and the <strong>Directory (tenant) ID</strong>.</li>
+        <li>On the overview page, copy the <strong>Application (client) ID</strong>. This is the <strong>DriveCraft registration ID</strong> that people type when they sign in.</li>
       </ol>
 
       <h2>2. Add the permissions</h2>
@@ -66,9 +66,11 @@
       <p>Optional: to sign in with a code on another device from the command line, open <strong>Authentication</strong> and set <strong>Allow public client flows</strong> to <em>Yes</em>.</p>
 
       <h2>3. Tell DriveCraft</h2>
-      <p>Start DriveCraft. On the <strong>Set up DriveCraft</strong> screen, paste the Application (client) ID and the Directory (tenant) ID, then choose <strong>Save</strong>. Give the same two IDs to everyone else in your organization who will use it.</p>
+      <p>Give everyone who will use DriveCraft two things: your organization's SharePoint address, such as <code>contoso.sharepoint.com</code>, and the registration ID.</p>
+      <p>When DriveCraft starts, it asks for them on its <strong>Sign in</strong> screen. From the address it finds your organization's directory by itself, so nobody needs the directory (tenant) ID. Each person then signs in with their own work account in the browser.</p>
       <p>From the command line instead:</p>
-      <pre><code>drivecraft setup --client-id APPLICATION-ID --tenant TENANT-ID</code></pre>
+      <pre><code>drivecraft setup --client-id REGISTRATION-ID --address contoso.sharepoint.com</code></pre>
+      <p>DriveCraft will also sign in to ShareCraft sites, such as <code>contoso.sharecraft.io</code>, once ShareCraft's sync connection is built. ShareCraft will not need a Microsoft registration.</p>
 
       <h2>What this allows</h2>
       <ul>
@@ -79,6 +81,6 @@
       <p class="policy-links"><a href="/#download">Download for Windows</a> <a href="/code-signing.html">Code signing policy</a></p>
     </section>
   </main>
-  <footer><span>DriveCraft</span><span><a href="/code-signing.html">Code signing policy</a> · <a href="https://github.com/ThineCraft/DriveCraft/blob/main/LICENSE">MIT License</a> · Part of the ThineCraft ecosystem.</span></footer>
+  <footer><span>DriveCraft</span><span><a href="/code-signing.html">Code signing policy</a> · <a href="https://github.com/ThineCraft/DriveCraft/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a> · Part of the ThineCraft ecosystem.</span></footer>
 </body>
 </html>

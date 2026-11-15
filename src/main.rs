@@ -52,8 +52,12 @@ enum Cmd {
         #[arg(long)]
         client_id: String,
         /// Tenant ID or domain. Leave out to allow any work or school account.
-        #[arg(long, default_value = auth::DEFAULT_TENANT)]
+        #[arg(long, default_value = auth::DEFAULT_TENANT, conflicts_with = "address")]
         tenant: String,
+        /// The organization's SharePoint address, such as contoso.sharepoint.com.
+        /// DriveCraft finds the tenant from it.
+        #[arg(long)]
+        address: Option<String>,
     },
     /// Sign in with a work or school account.
     Login {
@@ -383,8 +387,21 @@ async fn main() {
 async fn run(cli: Cli) -> Result<bool> {
     let home = Home::locate()?;
     match cli.cmd {
-        Cmd::Setup { client_id, tenant } => {
-            home.save_app(&client_id, &tenant)?;
+        Cmd::Setup { client_id, tenant, address } => {
+            match address {
+                Some(typed) => {
+                    let at = drivecraft::site::read(&typed)?;
+                    if at.service == drivecraft::site::Service::ShareCraft {
+                        anyhow::bail!("{}: signing in to ShareCraft is not available yet", at.host);
+                    }
+                    let tenant = drivecraft::site::sharepoint_tenant(&at.host).await?;
+                    println!("{} belongs to tenant {tenant}", at.host);
+                    home.save_app_at(&client_id, &tenant, Some(&at.host))?;
+                }
+                None => {
+                    home.save_app(&client_id, &tenant)?;
+                }
+            }
             println!("Saved. Next: drivecraft login --read-only");
         }
         Cmd::Login { read_only, device_code } => {
@@ -825,7 +842,12 @@ async fn run(cli: Cli) -> Result<bool> {
             println!("DriveCraft {}", env!("CARGO_PKG_VERSION"));
             println!("Data folder: {}", home.dir.display());
             match home.app() {
-                Ok(app) => println!("App registration: {} (tenant: {})", app.client_id, app.tenant),
+                Ok(app) => println!(
+                    "App registration: {} (tenant: {}{})",
+                    app.client_id,
+                    app.tenant,
+                    app.address.map(|a| format!(", found from {a}")).unwrap_or_default()
+                ),
                 Err(_) => println!("App registration: not set up. Run: drivecraft setup --client-id <id>"),
             }
             println!("Network: sending through {}", drivecraft::net::active_link().describe());

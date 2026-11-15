@@ -10,6 +10,7 @@ pub mod engine;
 pub mod explorer;
 pub mod paths;
 pub mod quickxor;
+pub mod site;
 pub mod remote;
 pub mod auth;
 pub mod graph;

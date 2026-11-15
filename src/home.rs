@@ -74,6 +74,12 @@ impl Home {
     }
 
     pub fn save_app(&self, client_id: &str, tenant: &str) -> Result<AppConfig> {
+        self.save_app_at(client_id, tenant, None)
+    }
+
+    /// Saves the app registration, remembering the organization address the tenant
+    /// was found from, if there was one.
+    pub fn save_app_at(&self, client_id: &str, tenant: &str, address: Option<&str>) -> Result<AppConfig> {
         let app = AppConfig {
             client_id: client_id.trim().to_string(),
             tenant: if tenant.trim().is_empty() {
@@ -81,6 +87,7 @@ impl Home {
             } else {
                 tenant.trim().to_string()
             },
+            address: address.map(|a| a.trim().to_string()).filter(|a| !a.is_empty()),
         };
         if app.client_id.is_empty() {
             bail!("the application ID is empty");

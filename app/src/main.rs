@@ -79,6 +79,7 @@ where
 struct SetupView {
     client_id: String,
     tenant: String,
+    address: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -738,6 +739,7 @@ async fn get_state(app: AppHandle) -> Result<StateView, String> {
         let setup = home.app().ok().map(|a| SetupView {
             client_id: a.client_id,
             tenant: a.tenant,
+            address: a.address,
         });
         let tokens = match home.authenticator() {
             Ok(a) => a.current().await,
@@ -793,24 +795,74 @@ async fn whoami() -> Result<Option<Identity>, String> {
     .await
 }
 
+/// Says what kind of address the person has typed so far on the sign-in screen.
+#[tauri::command]
+fn check_address(address: String) -> Result<drivecraft::site::Address, String> {
+    drivecraft::site::read(&address).map_err(|e| e.to_string())
+}
+
+/// The sign-in screen's button: finds the organization from its address, saves the
+/// app registration, then signs in in the browser. With no address typed, it signs
+/// in with the registration already saved.
+#[tauri::command]
+async fn sign_in_at(address: String, client_id: String, read_only: bool) -> Result<Identity, String> {
+    local(move || async move {
+        let home = Home::locate()?;
+        if !address.trim().is_empty() {
+            let at = drivecraft::site::read(&address)?;
+            if at.service == drivecraft::site::Service::ShareCraft {
+                anyhow::bail!(
+                    "the address {} looks like a ShareCraft site. Signing in to ShareCraft is not available yet: \
+                     DriveCraft will connect to ShareCraft once ShareCraft's sync connection is built.",
+                    at.host
+                );
+            }
+            let saved = home.app().ok();
+            let client_id = match client_id.trim() {
+                "" => match &saved {
+                    Some(s) => s.client_id.clone(),
+                    None => anyhow::bail!(
+                        "type the DriveCraft registration ID your administrator gave you. \
+                         See https://drive.thinecraft.io/setup.html for how to register DriveCraft."
+                    ),
+                },
+                id => id.to_string(),
+            };
+            let tenant = drivecraft::site::sharepoint_tenant(&at.host).await?;
+            let changed = saved
+                .as_ref()
+                .is_none_or(|s| s.client_id != client_id || s.tenant != tenant);
+            home.save_app_at(&client_id, &tenant, Some(&at.host))?;
+            // A different registration or organization cannot use the old sign-in.
+            if changed {
+                home.authenticator()?.logout()?;
+            }
+        } else if home.app().is_err() {
+            anyhow::bail!("type your organization's address, such as contoso.sharepoint.com");
+        }
+        sign_in(&home, read_only).await
+    })
+    .await
+}
+
 /// Opens the system browser to sign in. Returns once the browser sign-in completes.
 #[tauri::command]
 async fn login(read_only: bool) -> Result<Identity, String> {
-    local(move || async move {
-        let home = Home::locate()?;
-        let auth = home.authenticator()?;
-        let scopes = if read_only {
-            auth::scopes_read_only()
-        } else {
-            auth::scopes_read_write()
-        };
-        let tokens = auth.login_browser(&scopes, |_| {}).await?;
-        let can_write = tokens.can_write();
-        let graph = drivecraft::graph::GraphClient::new(auth);
-        let (name, account) = graph.me().await.unwrap_or_default();
-        Ok(Identity { name, account, can_write })
-    })
-    .await
+    local(move || async move { sign_in(&Home::locate()?, read_only).await }).await
+}
+
+async fn sign_in(home: &Home, read_only: bool) -> anyhow::Result<Identity> {
+    let auth = home.authenticator()?;
+    let scopes = if read_only {
+        auth::scopes_read_only()
+    } else {
+        auth::scopes_read_write()
+    };
+    let tokens = auth.login_browser(&scopes, |_| {}).await?;
+    let can_write = tokens.can_write();
+    let graph = drivecraft::graph::GraphClient::new(auth);
+    let (name, account) = graph.me().await.unwrap_or_default();
+    Ok(Identity { name, account, can_write })
 }
 
 #[tauri::command]
@@ -1516,6 +1568,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_state,
             save_setup,
+            check_address,
+            sign_in_at,
             whoami,
             login,
             logout,

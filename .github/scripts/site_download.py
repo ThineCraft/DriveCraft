@@ -32,12 +32,12 @@ def block(version: str, name: str, size: int, sha256: str) -> str:
     v, n = html.escape(version), html.escape(name)
     return f"""{START}
       <p class="download-version">DriveCraft {v} for Windows · {size_text(size)}</p>
-      <div class="cta-links"><a class="download-main" href="/download/{n}" download>Download DriveCraft {v}</a><a href="{REPO}">Get the source <span aria-hidden="true">↗</span></a></div>
+      <div class="cta-links"><a class="download-main" href="/download/{n}" download>Download DriveCraft {v}</a><a href="{REPO}" target="_blank" rel="noopener">Get the source <span aria-hidden="true">↗</span></a></div>
       <ul class="download-facts">
         <li>Installs for your Windows account only; no administrator rights needed. <a href="/setup.html">Set up DriveCraft</a> for your organization first.</li>
         <li>Not yet signed with a code-signing certificate, so Windows asks before running it: choose <strong>More info</strong>, then <strong>Run anyway</strong>. <a href="/code-signing.html">Code signing policy</a></li>
         <li>SHA-256 <code class="download-hash">{sha256}</code></li>
-        <li>The same file is on <a href="{REPO}/releases/tag/v{v}">GitHub</a>, with the record of how GitHub built it.</li>
+        <li>The same file is on <a href="{REPO}/releases/tag/v{v}" target="_blank" rel="noopener">GitHub</a>, with the record of how GitHub built it.</li>
       </ul>
       {END}"""
 

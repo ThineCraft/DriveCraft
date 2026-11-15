@@ -530,3 +530,8 @@ dialog::backdrop { background: #050c1499; backdrop-filter: blur(7px); -webkit-ba
   .stats { grid-template-columns: repeat(2, 1fr); row-gap: 1rem; }
   .stat:nth-child(3) { padding-left: 0; border-left: 0; }
 }
+
+/* The sign-in screen: a hint under each box, and the ShareCraft note. */
+.hint { margin: .35rem 0 0; line-height: 1.45; }
+#signin-sharecraft { display: block; }
+#signin-sharecraft[hidden] { display: none; }

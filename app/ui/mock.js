@@ -12,7 +12,7 @@
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
   const data = {
-    version: "0.1.1",
+    version: "0.1.2",
     data_dir: "C:\\Users\\you\\AppData\\Local\\ThineCraft\\DriveCraft\\data",
     setup: view === "setup" ? null : { client_id: "a8a192b4-0000-0000-0000-000000000000", tenant: "organizations" },
     signed_in: view !== "setup" && view !== "signin",
@@ -149,6 +149,27 @@
     async save_icon({ key }) { return `C:\\Users\\you\\AppData\\Local\\ThineCraft\\DriveCraft\\data\\icons\\${key}.ico`; },
     async whoami() { return data.signed_in ? Object.assign({}, who, { can_write: data.can_write }) : null; },
     async save_setup({ clientId, tenant }) { data.setup = { client_id: clientId, tenant: tenant || "organizations" }; data.signed_in = false; },
+    // The same rules as src/site.rs, roughly, for the design preview.
+    async check_address({ address }) {
+      let host = address.trim().replace(/^https?:\/\//i, "").split(/[/?#]/)[0].split(":")[0].toLowerCase().replace(/\.$/, "");
+      if (!host) throw "type your organization's address, such as contoso.sharepoint.com";
+      if (!/^[a-z0-9][a-z0-9.-]*$/.test(host) || host.includes("..")) throw `"${address.trim()}" is not an address DriveCraft can use; type one like contoso.sharepoint.com`;
+      if (!host.includes(".")) host += ".sharepoint.com";
+      if (host.endsWith(".sharepoint.com")) return { host, service: "sharepoint" };
+      if (host.includes(".sharepoint.")) throw `the address ${host} is in one of Microsoft's separate government or national clouds. DriveCraft works with Microsoft 365's worldwide cloud, where addresses end in .sharepoint.com`;
+      return { host, service: "sharecraft" };
+    },
+    async sign_in_at({ address, clientId, readOnly }) {
+      if (address.trim()) {
+        const at = await this.check_address({ address });
+        if (at.service === "sharecraft") throw `the address ${at.host} looks like a ShareCraft site. Signing in to ShareCraft is not available yet: DriveCraft will connect to ShareCraft once ShareCraft's sync connection is built.`;
+        const id = clientId.trim() || (data.setup && data.setup.client_id);
+        if (!id) throw "type the DriveCraft registration ID your administrator gave you. See https://drive.thinecraft.io/setup.html for how to register DriveCraft.";
+        await wait(500);
+        data.setup = { client_id: id, tenant: "3a5b1c2d-0000-4000-8000-1234567890ab", address: at.host };
+      } else if (!data.setup) throw "type your organization's address, such as contoso.sharepoint.com";
+      return this.login({ readOnly });
+    },
     async login({ readOnly }) { await wait(900); data.signed_in = true; data.can_write = !readOnly; return Object.assign({}, who, { can_write: data.can_write }); },
     async logout() { data.signed_in = false; },
     async pick_folder() { return "C:\\Work\\Finance"; },

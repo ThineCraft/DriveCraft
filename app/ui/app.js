@@ -187,7 +187,7 @@ function current() {
 }
 
 function render() {
-  const needSetup = !state.setup || editingSetup;
+  const needSetup = editingSetup;
   const needSignin = !needSetup && !state.signed_in;
   const main = !needSetup && !needSignin;
   $("view-setup").hidden = !needSetup;
@@ -199,14 +199,13 @@ function render() {
   $("autostart-wrap").hidden = !main || !state.is_windows;
   $("net-wrap").hidden = !main;
   if (needSetup) {
-    $("setup-cancel").hidden = !state.setup;
     if (state.setup && !$("setup-client").value) {
       $("setup-client").value = state.setup.client_id;
       $("setup-tenant").value = state.setup.tenant === "organizations" ? "" : state.setup.tenant;
     }
     return;
   }
-  if (needSignin) return;
+  if (needSignin) { renderSignin(); return; }
 
   if (!state.connections.some((c) => c.name === selected)) {
     selected = state.connections.length ? state.connections[0].name : null;
@@ -677,19 +676,97 @@ async function runSync(name, { dryRun = false, confirmDeletes = false } = {}) {
   await refresh();
 }
 
-async function signIn(readOnly, errorBox) {
+// ---- the sign-in screen -----------------------------------------------------
+// The person types their organization's address. A SharePoint address also needs
+// the registration ID from their administrator; a ShareCraft address cannot be
+// signed in to yet, and the screen says so.
+
+let signinFilled = false;
+let addressKind = null; // { host, service } once the address reads well
+let addressAsked = 0;
+let addressTimer = null;
+
+function renderSignin() {
+  if (!signinFilled) {
+    signinFilled = true;
+    if (state.setup) {
+      $("signin-address").value = state.setup.address || "";
+      $("signin-client").value = state.setup.client_id || "";
+    }
+    checkAddress();
+  }
+}
+
+async function checkAddress() {
+  const typed = $("signin-address").value;
+  const ask = ++addressAsked;
+  const kind = $("signin-kind");
+  kind.classList.remove("error");
+  $("signin-error").hidden = true;
+  if (!typed.trim()) {
+    addressKind = null;
+    kind.textContent = state.setup
+      ? "Leave it empty to sign in with the organization DriveCraft already has, or type a different one."
+      : "A SharePoint address, like contoso.sharepoint.com, or a ShareCraft one, like contoso.sharecraft.io.";
+    showAddressKind();
+    return;
+  }
+  try {
+    const at = await invoke("check_address", { address: typed });
+    if (ask !== addressAsked) return;
+    addressKind = at;
+    kind.textContent = at.service === "sharepoint"
+      ? `SharePoint in Microsoft 365: ${at.host}`
+      : `ShareCraft: ${at.host}`;
+  } catch (e) {
+    if (ask !== addressAsked) return;
+    addressKind = { service: "invalid" };
+    kind.textContent = sentence(e);
+    kind.classList.add("error");
+  }
+  showAddressKind();
+}
+
+function showAddressKind() {
+  const service = addressKind ? addressKind.service : null;
+  const sharecraft = service === "sharecraft";
+  $("signin-registration").hidden = service !== "sharepoint";
+  $("signin-sharecraft").hidden = !sharecraft;
+  if (sharecraft) {
+    $("signin-sharecraft").textContent =
+      `Signing in to ShareCraft is not available yet. DriveCraft will connect to ${addressKind.host} once ShareCraft's sync connection is built. Until then DriveCraft works with SharePoint and OneDrive for work.`;
+  }
+  $("signin-access").hidden = sharecraft;
+  $("signin-button").disabled = sharecraft || service === "invalid" || (!service && !state.setup);
+}
+
+$("signin-address").addEventListener("input", () => {
+  clearTimeout(addressTimer);
+  addressTimer = setTimeout(checkAddress, 250);
+});
+
+// DriveCraft's messages start in lower case so they read well inside others;
+// on their own they start with a capital.
+function sentence(e) {
+  const s = String(e);
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+async function signIn(readOnly, errorBox, fromScreen) {
   if (errorBox) errorBox.hidden = true;
   $("signin-wait").hidden = false;
   $("signin-button").disabled = true;
   try {
-    identity = await invoke("login", { readOnly });
+    identity = fromScreen
+      ? await invoke("sign_in_at", { address: $("signin-address").value, clientId: $("signin-client").value, readOnly })
+      : await invoke("login", { readOnly });
     await refresh();
   } catch (e) {
-    if (errorBox) { errorBox.textContent = String(e); errorBox.hidden = false; }
+    if (errorBox) { errorBox.textContent = sentence(e); errorBox.hidden = false; }
     else toast(e);
   }
   $("signin-wait").hidden = true;
-  $("signin-button").disabled = false;
+  showAddressKind();
 }
 
 // ---- wiring ----------------------------------------------------------------
@@ -718,6 +795,7 @@ $("setup-form").addEventListener("submit", async (ev) => {
     await invoke("save_setup", { clientId: $("setup-client").value, tenant: $("setup-tenant").value });
     editingSetup = false;
     identity = null;
+    signinFilled = false;
     await refresh();
   } catch (e) {
     err.textContent = String(e);
@@ -726,10 +804,13 @@ $("setup-form").addEventListener("submit", async (ev) => {
 });
 $("setup-cancel").addEventListener("click", () => { editingSetup = false; render(); });
 $("signin-setup").addEventListener("click", () => { editingSetup = true; render(); });
-$("signin-button").addEventListener("click", () => {
+$("signin-form").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  if ($("signin-button").disabled) return;
   const readOnly = document.querySelector("input[name=access]:checked").value === "read";
-  signIn(readOnly, $("signin-error"));
+  signIn(readOnly, $("signin-error"), true);
 });
+$("signin-guide").addEventListener("click", () => invoke("open_site", { page: "setup" }).catch(toast));
 
 // Pop-up menus: the account menu and the library settings.
 const POPS = [["account-button", "account-menu"], ["settings-button", "settings-pop"], ["net-button", "net-menu"]];
