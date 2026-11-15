@@ -137,6 +137,9 @@ footer { display: flex; justify-content: space-between; gap: 1rem; padding: 2rem
 @media (prefers-reduced-motion: reduce) { .lightbox[open] { animation: none; } .zoom:hover img, .zoom:focus-visible img { transform: none; } }
 
 .cta-links { display: flex; flex-wrap: wrap; gap: .75rem; }
+.hero-note { max-width: 36rem; margin: .9rem 0 0; color: #c6c2b7; font-size: .95rem; line-height: 1.55; }
+.hero-note a, .source-cta p.setup-first a { display: inline; padding: 0; border: 0; background: none; color: var(--accent); font-weight: 700; text-decoration: underline; }
+.source-cta p.setup-first { margin: 1.25rem 0 0; padding: .9rem 1.1rem; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .source-cta p.cta-note { margin: 1.25rem 0 0; font-size: .95rem; }
 .source-cta p.cta-note a { display: inline; padding: 0; border: 0; font-weight: 700; text-decoration: underline; }
 
