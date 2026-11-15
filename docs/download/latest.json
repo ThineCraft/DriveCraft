@@ -1,7 +1,7 @@
 {
-  "version": "0.1.1",
-  "file": "/download/DriveCraft_0.1.1_x64-setup.exe",
-  "size": 9157485,
-  "sha256": "ecf8ce41b3df67d4643d00d95680c77165b6639fa54f38ca9e715c2961023591",
-  "release": "https://github.com/ThineCraft/DriveCraft/releases/tag/v0.1.1"
+  "version": "0.1.2",
+  "file": "/download/DriveCraft_0.1.2_x64-setup.exe",
+  "size": 9180670,
+  "sha256": "c4795e7f0eb0b91c5d07d00941f35a65318ad3db71465787ec0aa61bbde979ee",
+  "release": "https://github.com/ThineCraft/DriveCraft/releases/tag/v0.1.2"
 }
